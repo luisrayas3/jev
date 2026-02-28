@@ -1,111 +1,120 @@
-# Project vision
+# Vision
 
-jev is an agent orchestrator
-where plans are compiled Rust programs
-that orchestrate LLM subagents at runtime,
-with resource access enforced by the compiler.
+jev is an AI assistant you can trust
+with your real resources —
+email, calendar, files, messages, accounts —
+because permissions are compiler-enforced,
+not prompt-based.
 
-## What jev is
+## The trust problem
 
-An LLM planner generates a Rust program.
-That program is an orchestration plan:
-it calls subagents, transforms data,
-reads and writes resources,
-and coordinates all of it
-with compile-time safety guarantees.
+AI assistants face a binary choice:
+they either can't access your real stuff
+(safe but useless for real work),
+or they get broad access with no guardrails
+(useful but dangerous).
 
-The compiled plan is not a static script.
-It's a program that invokes LLM reasoning
-at runtime — but each subagent call
-is constrained by typed function signatures
-that control what resources it can touch,
-what model it uses,
-and what output type it must produce.
+No current architecture lets you say
+"read my email and calendar,
+but do not send anything or modify anything"
+and have that *enforced*.
+Today, that boundary is a prompt instruction
+the model might follow.
+jev makes it a constraint
+the compiler proves before anything runs.
 
-## What makes it different
+## How it works (in brief)
 
-**Agent orchestration, not code generation.**
-The output isn't "a Rust program."
-It's an agent workflow
-that happens to be expressed as Rust,
-which means the compiler can enforce properties
-that other orchestrators check at runtime
-or not at all.
+When you describe a task,
+jev generates a plan as readable source code.
+The plan compiles or it doesn't run.
+The type system encodes
+what each part of the plan can access:
+read-only email, read-only calendar,
+write access scoped to a drafts folder.
+You review the plan, see exactly what it will do,
+and the compiler guarantees
+it can't do anything else.
 
-**Compile-time capability scoping.**
-Each subagent gets exactly the resources
-it needs, enforced by function signatures.
-A summarizer gets `&Fs` (read-only).
-A classifier gets `&str` and returns an enum.
-A report writer gets `&mut Fs` scoped to an output dir.
-The borrow checker proves these constraints
-before anything runs.
+Deterministic work — filtering, transforming,
+aggregating — runs as compiled native code.
+Reasoning work runs as LLM calls,
+each scoped to only the resources it needs.
+The right-sized model handles each subtask:
+a small model for classification,
+a frontier model for complex reasoning.
 
-**Spectrum of subagent specialization.**
-From highly specialized typed operations
-(classification with a concrete enum return type,
-provided to a small fine-tuned model)
-to frontier models with generic interfaces
-(complex reasoning, open-ended generation) —
-all with resource constraints.
-The right model for each subtask.
+See [architecture.md](architecture.md)
+for technical design details.
 
-**Compiled code for non-fuzzy work.**
-Data transforms, filtering, aggregation,
-format conversion, file I/O patterns —
-these don't need LLM reasoning.
-They compile to native code and run fast.
-Other orchestrators either abuse LLM genericism
-for straightforward transforms
-or shell out to ad-hoc scripts.
-Here it's all one program,
-and the deterministic parts are just Rust.
+## Use cases
 
-**The planning cycle is a core concern.**
-The planner isn't a black box that runs once.
-How the plan gets iterated,
-what permissions the planner has,
-how the human reviews and approves,
-how to maximize convenience and speed
-while maintaining safety —
-this is first-class, opinionated design work.
+### Personal automation with real resources
 
-## Core philosophy
+An AI assistant you trust enough
+to give access to your actual email, calendar,
+files, messages, and accounts.
 
-**Rust is the orchestration language.**
-Not a DSL, not JSON action schemas,
-not a chain-of-thought trace.
-Rust source code, validated by `rustc`,
-compiled to a native binary.
+*Go through my last 50 emails,
+find anything that looks like an action item,
+cross-reference with my calendar for conflicts,
+and draft replies for the ones
+that need scheduling.*
 
-**The type system is the security model.**
-Resource access, trust levels,
-subagent capabilities —
-all encoded as types.
-If it compiles, the access patterns are valid.
+This touches email (read-only),
+calendar (read-only),
+and drafts (write-only).
+The plan proves those access boundaries
+before anything executes.
 
-**The library API is the product.**
-The value is in typed resource APIs
-and subagent interfaces
-that make correct orchestrations natural
-and unsafe ones unrepresentable.
+### Multi-resource coordination
 
-## Long-term vision
+Tasks that reach across multiple resources
+where the blast radius of a mistake is largest.
+Email + calendar + files + messaging,
+each scoped to exactly the access required,
+even when multiple resources
+and multiple reasoning steps are in play.
 
-A rich standard library of typed resource APIs
-and subagent patterns —
-from filesystem and HTTP
-to email, calendar, databases, knowledge bases —
-where a planner can compose
-multi-resource, multi-agent workflows
-with compile-time safety guarantees.
+*Check my calendar for meetings this week,
+pull the relevant docs from shared drives,
+summarize prep notes for each meeting,
+and add them to my task list.*
 
-Subagents range from tiny specialized classifiers
-running locally on small models
-to frontier models handling complex reasoning,
-all scoped to exactly the capabilities they need.
+### Repeatable batch automation
 
-The deterministic parts run as compiled native code.
-The fuzzy parts run as constrained LLM calls.
-The plan ties it all together,
-and the compiler guarantees the wiring is sound.
+Tasks that run over volume or on a schedule.
+Compilation cost is invisible
+against the planning step
+and amortized across runs.
+Deterministic work runs as native code,
+not wasted LLM calls.
+
+*Every Monday, scan receipts from email,
+extract amounts and vendors,
+cross-reference against the budget spreadsheet,
+and file a summary.*
+
+### High-stakes operations
+
+Any domain where the cost of an agent
+doing the wrong thing is high:
+financial automation, compliance workflows,
+infrastructure management.
+Compiler-verified access patterns
+and readable, auditable plans
+provide confidence
+that runtime-checked frameworks cannot match.
+
+## The experience
+
+Describe a task in natural language.
+The system generates a plan you can read.
+The compiler verifies
+it respects your permission boundaries.
+You approve and it executes.
+
+Plans are saveable, rerunnable,
+versionable, and shareable.
+The plan is the artifact —
+auditable, reproducible, and proven safe.

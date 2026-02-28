@@ -21,6 +21,54 @@ The Rust type system and borrow checker
 enforce resource access, trust levels,
 and subagent capabilities at compile time.
 
+## Design principles
+
+**The type system is the security model.**
+Resource access, trust levels,
+and subagent capabilities are encoded as types.
+If it compiles, the access patterns are valid.
+No runtime permission checks,
+no hoping the LLM follows instructions.
+`rustc` is the safety checker.
+
+**The library API is the product.**
+The value is in typed resource APIs
+and subagent interfaces
+that make correct orchestrations natural
+and unsafe ones unrepresentable.
+A summarizer receives `&Fs` (read-only).
+A report writer receives `&mut Fs`
+scoped to an output directory.
+The borrow checker proves these constraints
+before anything runs.
+
+**Agent orchestration, not code generation.**
+The output isn't "a Rust program."
+It's an agent workflow
+expressed as Rust,
+which means the compiler can enforce properties
+that other orchestrators check at runtime
+or not at all.
+
+**Compiled code for deterministic work.**
+Data transforms, filtering, aggregation,
+format conversion, file I/O patterns —
+these don't need LLM reasoning.
+They compile to native code and run fast.
+Other orchestrators either waste LLM calls
+on straightforward transforms
+or shell out to ad-hoc scripts.
+Here it's all one program.
+
+**The planning loop is a first-class concern.**
+How the plan gets iterated,
+what permissions the planner has,
+how the human reviews and approves,
+how to maximize convenience
+while maintaining safety —
+this is opinionated design work,
+not an afterthought.
+
 ## System architecture
 
 ### Data flow
