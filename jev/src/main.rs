@@ -43,13 +43,13 @@ fn logs_dir() -> PathBuf {
     workspace_root().join("logs")
 }
 
-fn plan_id() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
-    format!("{:x}", ts)
+fn plan_id(task: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    task.hash(&mut h);
+    SYSTEM_PROMPT.hash(&mut h);
+    API_CATALOG.hash(&mut h);
+    format!("{:x}", h.finish())
 }
 
 fn latest_plan() -> Result<String> {
@@ -207,12 +207,22 @@ const MAX_RETRIES: usize = 3;
 
 /// Generate code, write it, compile it.
 /// On compile failure, feed errors back to the LLM and retry.
+/// Reuses existing plan if one exists for the same inputs.
 /// Returns (plan_dir, final_code).
 async fn plan_and_compile(task: &str) -> Result<(PathBuf, String)> {
+    let id = plan_id(task);
+    let plan_dir = plans_dir().join(&id);
+
+    // Reuse existing compiled plan
+    if binary_path(&plan_dir).exists() {
+        let code = std::fs::read_to_string(plan_dir.join("src/main.rs"))?;
+        eprintln!("  reusing existing plan {id}");
+        return Ok((plan_dir, code));
+    }
+
     let api_key =
         std::env::var("ANTHROPIC_API_KEY").context("ANTHROPIC_API_KEY not set")?;
     let client = reqwest::Client::new();
-    let id = plan_id();
 
     let user_prompt = format!(
         "Task: {task}\n\nAvailable API:\n{API_CATALOG}\n\nGenerate the Rust main.rs."
