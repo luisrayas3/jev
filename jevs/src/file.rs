@@ -2,6 +2,28 @@ use crate::runtime::RuntimeKey;
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
+pub const API_DOCS: &str = r#"## Filesystem — `jevs::file::File`
+
+```rust
+// Read a file (shared ref — can parallelize reads)
+let content: String = res.fs.read("file.txt").await?;
+
+// Glob for files (shared ref)
+let files: Vec<String> = res.fs.glob("*.rs").await?;
+
+// Write a file (exclusive ref — no concurrent access)
+res.fs.write("out.txt", "content").await?;
+```
+
+Key: `&File` = read, `&mut File` = write.
+Multiple reads can run in parallel via `tokio::join!`.
+A write requires exclusive access —
+no concurrent reads or writes.
+
+Do NOT construct File yourself.
+It is provided via `res.fs`.
+"#;
+
 /// Filesystem resource rooted at a directory.
 ///
 /// Safety semantics via Rust's borrow system:

@@ -1,3 +1,11 @@
+pub const API_DOCS: &str = r#"## Text — pure functions
+
+```rust
+let n = jevs::text::line_count("hello\nworld"); // 2
+let s = jevs::text::concat(&["a", "b", "c"]);  // "abc"
+```
+"#;
+
 /// Count lines in a string.
 pub fn line_count(text: &str) -> usize {
     text.lines().count()

@@ -1,3 +1,7 @@
+jev-go *ARGS:
+    #!/usr/bin/env fish
+    env (cat .env) cargo run --bin jev -- go "{{ARGS}}"
+
 sync:
     cargo build
 
@@ -7,7 +11,7 @@ test-unit:
     cargo test --workspace
 
 test-e2e:
-    bash tests/e2e.sh
+    fish tests/e2e.fish
 
 clean:
     cargo clean

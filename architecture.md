@@ -48,8 +48,8 @@ The value is in typed resource APIs
 and subagent interfaces
 that make correct orchestrations natural
 and unsafe ones unrepresentable.
-A summarizer receives `&Fs` (read-only).
-A report writer receives `&mut Fs`
+A summarizer receives `&File` (read-only).
+A report writer receives `&mut File`
 scoped to an output directory.
 A notification task receives `&EmailOutbox<"addr">`
 but never an inbox handle —
@@ -291,15 +291,22 @@ so the compiler enforces it.
 Exposes two layers:
 - **Operations** (default): `read`, `write`, `glob`, etc.
   Available to all task code.
-- **Constructors** (`Fs::open`, etc.):
-  Only available to the resource module.
-  Task code cannot import these.
+- **Constructors** (`File::open`, etc.):
+  Require `RuntimeKey` — not available in task code.
+Each module has `pub const API_DOCS`
+documenting its API for the planner.
+`jevs::api::catalog()` aggregates all module docs.
+
+**jevsr** (runtime crate):
+Resource constructors (`open_file`, etc.).
+Depends on `jevs` and holds the `RuntimeKey` magic.
+Only `resources.rs` (orchestrator-generated) uses this;
+task code is rejected if it references `jevsr`.
 
 **jev** (binary crate):
 CLI that runs the planning loop
-(task decomposition, code generation,
-compilation, permission extraction)
-and executes compiled plans in containers.
+(code generation, compilation, permission extraction)
+and executes compiled plans.
 
 **jevu** (user utility crate):
 Reusable local modules
@@ -350,13 +357,13 @@ that a task actually holds a resource handle
 before it can use it.
 
 **Filesystem uses `&`/`&mut` naturally.**
-`&Fs` is read access, `&mut Fs` is write access.
+`&File` is read access, `&mut File` is write access.
 The borrow checker prevents concurrent read/write
 conflicts automatically:
 
 ```rust
-fn summarize(fs: &Fs) { ... }        // read
-fn write_report(fs: &mut Fs) { ... } // write
+fn summarize(fs: &File) { ... }        // read
+fn write_report(fs: &mut File) { ... } // write
 ```
 
 **Service resources use capability-typed handles.**
@@ -400,10 +407,10 @@ because they're separate types.
 
 **Resource construction is root-only.**
 Only the resource module can call constructors
-like `Fs::open`.
+like `File::open`.
 Task code receives resources as parameters.
 This is enforced at compile time
-via a compilation boundary (see Phase 2).
+via a compilation boundary.
 
 **Stash is plan-local content-addressed storage.**
 Plans sometimes need to materialize
@@ -500,7 +507,7 @@ and lent to children explicitly:
 
 ```rust
 struct RootResources {
-    data: Fs,  // shared: both children need it
+    data: File,  // shared: both children need it
     summarize: SummarizeResources,
     format: FormatResources,
 }
@@ -622,19 +629,19 @@ it isn't trustworthy.
 - Single `main.rs` per plan (flat, no task tree)
 - LLM exchange logging for prompt iteration
 
-**Phase 2: Safety foundation + LLM calls**
-- Design and prototype the compilation boundary
-  (how `tasks.rs` compiles without constructor access;
-  the mechanism is the central architectural bet —
-  resolve before building on top of it)
+**Phase 2 (core done): Safety foundation**
+- Compilation boundary via `RuntimeKey` +
+  `check_boundary()` rejection of jevsr in task code
 - Split plan into `resources.rs` + `tasks.rs`
-- Fixed orchestrator-generated `main.rs`
-- Permission manifest extraction from `resources.rs`
-- User approval of permission manifest
-- Simple subagent interface
-  (`llm::complete(prompt) -> String`)
-- Stash (plan-local content-addressed storage)
-- Auto-generated API catalog from crate docs
+- Fixed orchestrator-generated `main.rs` (symlink)
+- `jevsr` runtime crate for resource constructors
+- Per-module `API_DOCS` + `jevs::api::catalog()`
+- Qualified imports (no `use jevs::*`)
+- Remaining:
+  permission manifest extraction,
+  user approval UX,
+  simple subagent interface,
+  stash
 
 **Phase 3: Real-world resources**
 - Trust-level resource types

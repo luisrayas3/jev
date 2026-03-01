@@ -43,12 +43,12 @@ fn logs_dir() -> PathBuf {
     workspace_root().join("logs")
 }
 
-fn plan_id(task: &str) -> String {
+fn plan_id(task: &str, catalog: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     task.hash(&mut h);
     SYSTEM_PROMPT.hash(&mut h);
-    API_CATALOG.hash(&mut h);
+    catalog.hash(&mut h);
     format!("{:x}", h.finish())
 }
 
@@ -66,53 +66,12 @@ fn latest_plan() -> Result<String> {
         .context("no plans found")
 }
 
-const API_CATALOG: &str = r#"
-# jevs API
-
-## Filesystem — `jevs::File`
-
-```rust
-// Read a file (shared ref — can parallelize reads)
-let content: String = res.fs.read("file.txt").await?;
-
-// Glob for files (shared ref)
-let files: Vec<String> = res.fs.glob("*.rs").await?;
-
-// Write a file (exclusive ref — no concurrent access)
-res.fs.write("out.txt", "content").await?;
-```
-
-Key: `&File` = read, `&mut File` = write.
-Multiple reads can run in parallel via `tokio::join!`.
-A write requires exclusive access — no concurrent reads or writes.
-
-Do NOT construct File yourself. It is provided via `res.fs`.
-
-## Text — pure functions
-
-```rust
-let n = jevs::line_count("hello\nworld");  // 2
-let s = jevs::concat(&["a", "b", "c"]);    // "abc"
-```
-
-## Trust types
-
-```rust
-let raw = Unverified(some_value);       // untrusted data
-let checked = raw.verify();              // -> Verified<T>
-checked.inner()                          // &T
-checked.into_inner()                     // T
-```
-
-Functions that require trust take `Verified<T>`.
-Passing `Unverified<T>` is a compile error.
-
-## Resources struct
+const RESOURCES_DOCS: &str = r#"## Resources struct
 
 Your code receives a `&mut Resources` with these fields:
 ```rust
 pub struct Resources {
-    pub fs: jevs::File,  // filesystem rooted at "."
+    pub fs: jevs::file::File,  // filesystem rooted at "."
 }
 ```
 Access resources through `res.fs`, not by constructing them.
@@ -124,9 +83,10 @@ You receive a task description and produce the body of a `tasks.rs` module that 
 
 Rules:
 - Output ONLY raw Rust source code. No markdown fences. No explanation. No commentary.
-- Start with `use jevs::*;` and `use crate::resources::Resources;`
+- Start with `use crate::resources::Resources;` and any needed qualified imports (e.g. `use jevs::text::line_count;`).
+- Do NOT use `use jevs::*;` — use qualified paths like `jevs::file::File`, `jevs::text::line_count`, `jevs::trust::Unverified`.
 - Implement `pub async fn root(res: &mut Resources) -> anyhow::Result<()>`
-- Access the filesystem through `res.fs` (it's a `jevs::File`).
+- Access the filesystem through `res.fs` (it's a `jevs::file::File`).
 - Do NOT construct File, use RuntimeKey, or reference jevsr. Resources are pre-constructed.
 - `res.fs.read()` and `res.fs.glob()` take `&self` (shared read access).
 - `res.fs.write()` takes `&mut self` (exclusive write access).
@@ -236,7 +196,9 @@ const MAX_RETRIES: usize = 3;
 /// Reuses existing plan if one exists for the same inputs.
 /// Returns (plan_dir, final_code).
 async fn plan_and_compile(task: &str) -> Result<(PathBuf, String)> {
-    let id = plan_id(task);
+    let catalog = jevs::api::catalog();
+    let full_docs = format!("{catalog}\n{RESOURCES_DOCS}");
+    let id = plan_id(task, &full_docs);
     let plan_dir = plans_dir().join(&id);
 
     // Reuse existing compiled plan
@@ -253,7 +215,7 @@ async fn plan_and_compile(task: &str) -> Result<(PathBuf, String)> {
     let client = reqwest::Client::new();
 
     let user_prompt = format!(
-        "Task: {task}\n\nAvailable API:\n{API_CATALOG}\n\n\
+        "Task: {task}\n\nAvailable API:\n{full_docs}\n\n\
          Generate tasks.rs (just the module body, starting with use statements)."
     );
 
@@ -371,7 +333,7 @@ anyhow = "1"
 
     // Generate resources.rs
     let resources_code = r#"pub struct Resources {
-    pub fs: jevs::File,
+    pub fs: jevs::file::File,
 }
 
 pub fn create() -> Resources {

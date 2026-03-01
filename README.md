@@ -7,18 +7,24 @@ Agent orchestration where the planner outputs Rust code.
 
 ```
 jevs/                 -- library crate (typed resource APIs)
-├── Cargo.toml
 ├── src/
-│   ├── lib.rs          -- re-exports
-│   ├── fs.rs           -- filesystem resource
+│   ├── lib.rs          -- module declarations
+│   ├── api.rs          -- per-module doc aggregator
+│   ├── file.rs         -- filesystem resource
 │   ├── text.rs         -- pure text operations
-│   └── trust.rs        -- trust-level types
+│   ├── trust.rs        -- trust-level types
+│   └── runtime.rs      -- runtime key (hidden from LLM)
+jevsr/                  -- runtime crate (resource constructors)
+├── src/
+│   └── lib.rs          -- open_file, etc.
 jev/                    -- CLI binary
-├── Cargo.toml
 ├── src/
 │   └── main.rs         -- plan / run / go commands
-jevu/                   -- user utility library (future)
+plan_main.rs            -- fixed shim symlinked into plans
 plans/                  -- generated programs land here
+tests/
+├── e2e.fish            -- full pipeline test (fish)
+└── fixtures/e2e/       -- test assets
 ```
 
 ## Quick start
@@ -26,7 +32,9 @@ plans/                  -- generated programs land here
 ### Prerequisites
 
 - [Rust](https://rustup.rs/) (stable toolchain)
-- `ANTHROPIC_API_KEY` environment variable set
+- [just](https://github.com/casey/just) (command runner)
+- [fish](https://fishshell.com/) (for e2e tests)
+- `.env` file with `ANTHROPIC_API_KEY=...` (for e2e / LLM)
 
 ### Setup
 
@@ -45,6 +53,11 @@ cargo run --bin jev -- run
 
 # Plan, confirm, and run in one shot
 cargo run --bin jev -- go 'list all files in current directory'
+
+# Run tests
+just test-unit    # unit tests only
+just test-e2e     # full LLM pipeline (needs .env)
+just test         # both
 ```
 
 ## Code style

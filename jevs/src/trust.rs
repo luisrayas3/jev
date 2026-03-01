@@ -1,3 +1,18 @@
+pub const API_DOCS: &str = r#"## Trust types
+
+```rust
+use jevs::trust::{Unverified, Verified};
+
+let raw = Unverified(some_value);  // untrusted data
+let checked = raw.verify();        // -> Verified<T>
+checked.inner()                    // &T
+checked.into_inner()               // T
+```
+
+Functions that require trust take `Verified<T>`.
+Passing `Unverified<T>` is a compile error.
+"#;
+
 /// Data from an external/untrusted source. Must be explicitly verified
 /// before use in sensitive operations.
 pub struct Unverified<T>(pub T);
@@ -9,7 +24,7 @@ pub struct Verified<T>(pub T);
 
 impl<T> Unverified<T> {
     /// Explicitly verify data. This is the only way to obtain `Verified<T>`.
-    /// In a real system this would gate on human confirmation.
+    /// TODO: Gate on human confirmation.
     pub fn verify(self) -> Verified<T> {
         Verified(self.0)
     }

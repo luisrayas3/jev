@@ -196,41 +196,49 @@ with decisions and changes from this session
 
 ## Miscellaneous guidance
 
-- No tests required currently (proof of concept phase)
 - Generated plan projects live in `plans/` and are
   gitignored (`plans/*/target`); the plans themselves
   are ephemeral
 - The `jevs` API surface is the core product —
   changes there should be deliberate and well-considered
+- Each jevs module has `pub const API_DOCS`
+  documenting its API; `jevs::api::catalog()`
+  aggregates them for the planner prompt
 - The planner prompt in `jev/src/main.rs` must stay
   in sync with the actual `jevs` public API
+- E2e test uses fish and requires `.env`
+  with `ANTHROPIC_API_KEY`
 
 ## Current status
 
-**Phase 1**: Core scaffold
-- Goal: working end-to-end flow
-  (plan -> compile -> run)
-- Scope: filesystem, text, and trust types only
+**Phase**: 2 core complete
+(see architecture.md for phased roadmap)
 
 **What's implemented**:
-- `jevs` library with `Fs`, `text`, and trust types
+- `jevs` library: `file`, `text`, `trust`, `runtime`
+  modules with per-module `API_DOCS` constants
+- `jevs::api::catalog()` aggregates module docs
+- `jevsr` runtime crate (resource constructors)
 - `jev` CLI with `plan`, `run`, and `go` subcommands
 - LLM integration via Anthropic API
-- Generated plan project scaffolding
+- Compilation boundary:
+  `RuntimeKey` guards resource construction,
+  `check_boundary()` rejects jevsr in task code
+- Plan structure: `main.rs` (symlink) +
+  `resources.rs` (generated) + `tasks.rs` (LLM)
+- Qualified imports (`jevs::file::File`,
+  not `use jevs::*`)
 - Compile error feedback loop
   (retry with error context, up to 4 attempts)
+- Unit tests (7) + e2e test (fish, full pipeline)
 
-**What's NOT implemented yet**
-(see architecture.md for phased roadmap):
-- Two-unit compilation
-  (`resources.rs` + `tasks.rs` split)
+**What's NOT implemented yet**:
 - Task tree decomposition
   (expand down / resolve up planning loop)
 - Permission manifest extraction and approval UX
 - Containerized execution
 - Additional resource types
   (email, calendar, knowledge base, HTTP)
-- Auto-generated API catalog from crate docs
 - Subagent call interface
 - Trust type `.verify()` as real human confirmation
 - jevu user utility library
