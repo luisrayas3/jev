@@ -114,6 +114,95 @@ and readable, auditable plans
 provide confidence
 that runtime-checked frameworks cannot match.
 
+## Threat model
+
+jev's safety story addresses four distinct threats,
+in priority order.
+
+### 1. Prompt injection
+
+The primary threat.
+Untrusted content (emails, web pages, documents)
+can contain adversarial instructions
+that hijack the LLM into unauthorized actions.
+
+jev's defense is structural:
+the compiler enforces resource boundaries
+*before* any untrusted content is seen.
+A task that reads email cannot send email —
+not because the LLM follows instructions,
+but because `&EmailInbox` has no `send` method.
+Injected instructions can corrupt reasoning
+but cannot escalate access.
+
+The attack surface is the planning phase,
+where the LLM has full capability.
+The defense there is the permission manifest:
+the user reviews a flat list of grants
+before anything executes.
+An injection that inflates permissions
+is visible in the manifest.
+
+### 2. LLM incompetence
+
+The most common failure mode.
+The model generates bad plans:
+wrong logic, missed edge cases,
+hallucinated APIs, subtle data corruption.
+
+jev addresses this at multiple layers:
+- **Compilation** catches type errors,
+  wrong resource usage, and API misuse
+- **Deterministic code** for filtering,
+  transforming, and aggregating
+  means LLM errors in data handling
+  surface as compile errors, not silent bugs
+- **Task decomposition** scopes each LLM call
+  to a narrow, well-defined subtask
+  with only the resources it needs
+- **Right-sized models** match task complexity
+  to model capability,
+  reducing error rates on simple work
+
+What jev does *not* do:
+verify that correct logic was applied
+within a valid plan.
+A plan that reads the wrong emails
+but has valid types will compile and run.
+Auditability (readable plans, logged execution)
+is the mitigation, not prevention.
+
+### 3. Privacy
+
+User data flows through LLM calls.
+jev constrains *which* data reaches *which* call
+via resource scoping —
+a subtask only sees the resources
+passed to it as parameters.
+
+This limits exposure surface
+but does not solve the underlying problem:
+data sent to an LLM provider
+is data sent to a third party.
+Local model support, data classification,
+and provider trust policies
+are future concerns, not current guarantees.
+
+### 4. Other adversarial threats
+
+Supply chain attacks on dependencies,
+container escapes, compromised model providers,
+and side-channel exfiltration.
+
+jev's contribution here is minimal today.
+Container isolation and dependency auditing
+are standard infrastructure concerns,
+not novel to this architecture.
+The compilation boundary does limit
+what a compromised subtask can reach,
+but this is a side effect of the design,
+not a primary defense.
+
 ## The experience
 
 Describe a task in natural language.

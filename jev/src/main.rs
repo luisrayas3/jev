@@ -69,25 +69,24 @@ fn latest_plan() -> Result<String> {
 const API_CATALOG: &str = r#"
 # jevs API
 
-## Filesystem — `jevs::Fs`
+## Filesystem — `jevs::File`
 
 ```rust
-// Open a filesystem rooted at a directory
-let fs = Fs::open("/some/path");
-
 // Read a file (shared ref — can parallelize reads)
-let content: String = fs.read("file.txt").await?;
+let content: String = res.fs.read("file.txt").await?;
 
 // Glob for files (shared ref)
-let files: Vec<String> = fs.glob("*.rs").await?;
+let files: Vec<String> = res.fs.glob("*.rs").await?;
 
 // Write a file (exclusive ref — no concurrent access)
-fs.write("out.txt", "content").await?;
+res.fs.write("out.txt", "content").await?;
 ```
 
-Key: `&Fs` = read, `&mut Fs` = write.
+Key: `&File` = read, `&mut File` = write.
 Multiple reads can run in parallel via `tokio::join!`.
 A write requires exclusive access — no concurrent reads or writes.
+
+Do NOT construct File yourself. It is provided via `res.fs`.
 
 ## Text — pure functions
 
@@ -107,20 +106,30 @@ checked.into_inner()                     // T
 
 Functions that require trust take `Verified<T>`.
 Passing `Unverified<T>` is a compile error.
+
+## Resources struct
+
+Your code receives a `&mut Resources` with these fields:
+```rust
+pub struct Resources {
+    pub fs: jevs::File,  // filesystem rooted at "."
+}
+```
+Access resources through `res.fs`, not by constructing them.
 "#;
 
 const SYSTEM_PROMPT: &str = r#"You are a Rust code generator for the jev agent system.
 
-You receive a task description and produce a complete Rust `main.rs` that accomplishes the task using the jevs library.
+You receive a task description and produce the body of a `tasks.rs` module that accomplishes the task using the jevs library.
 
 Rules:
 - Output ONLY raw Rust source code. No markdown fences. No explanation. No commentary.
-- The program must be a complete `main.rs` with `use jevs::*;`
-- Use `#[tokio::main]` for async main.
-- Use `anyhow::Result` for error handling.
-- `Fs::open(path)` returns `Fs` directly (not Result). Do NOT use `?` on it.
-- `fs.read()` and `fs.glob()` take `&self` (shared read access).
-- `fs.write()` takes `&mut self` (exclusive write access).
+- Start with `use jevs::*;` and `use crate::resources::Resources;`
+- Implement `pub async fn root(res: &mut Resources) -> anyhow::Result<()>`
+- Access the filesystem through `res.fs` (it's a `jevs::File`).
+- Do NOT construct File, use RuntimeKey, or reference jevsr. Resources are pre-constructed.
+- `res.fs.read()` and `res.fs.glob()` take `&self` (shared read access).
+- `res.fs.write()` takes `&mut self` (exclusive write access).
 - Use `tokio::join!` for parallel reads.
 - Never combine `&` and `&mut` access in the same join — it won't compile.
 - Print results to stdout so the user can see them.
@@ -203,6 +212,23 @@ async fn call_llm_raw(
     Ok(code)
 }
 
+/// Check that tasks.rs doesn't reference jevsr, RuntimeKey, or File::open.
+fn check_boundary(code: &str) -> Result<()> {
+    let violations: Vec<&str> = ["jevsr", "RuntimeKey", "File::open"]
+        .into_iter()
+        .filter(|term| code.contains(term))
+        .collect();
+
+    if !violations.is_empty() {
+        bail!(
+            "Boundary violation: tasks.rs must not reference {}. \
+             Resources are provided via the Resources struct.",
+            violations.join(", ")
+        );
+    }
+    Ok(())
+}
+
 const MAX_RETRIES: usize = 3;
 
 /// Generate code, write it, compile it.
@@ -215,7 +241,9 @@ async fn plan_and_compile(task: &str) -> Result<(PathBuf, String)> {
 
     // Reuse existing compiled plan
     if binary_path(&plan_dir).exists() {
-        let code = std::fs::read_to_string(plan_dir.join("src/main.rs"))?;
+        let code = std::fs::read_to_string(
+            plan_dir.join("src/tasks.rs"),
+        )?;
         eprintln!("  reusing existing plan {id}");
         return Ok((plan_dir, code));
     }
@@ -225,7 +253,8 @@ async fn plan_and_compile(task: &str) -> Result<(PathBuf, String)> {
     let client = reqwest::Client::new();
 
     let user_prompt = format!(
-        "Task: {task}\n\nAvailable API:\n{API_CATALOG}\n\nGenerate the Rust main.rs."
+        "Task: {task}\n\nAvailable API:\n{API_CATALOG}\n\n\
+         Generate tasks.rs (just the module body, starting with use statements)."
     );
 
     let mut messages = vec![Message {
@@ -250,6 +279,28 @@ async fn plan_and_compile(task: &str) -> Result<(PathBuf, String)> {
         });
         log_exchange(&id, &messages, &label)?;
 
+        // Check boundary before writing
+        if let Err(e) = check_boundary(&code) {
+            if attempt == MAX_RETRIES {
+                bail!(
+                    "Boundary violation after {} attempts: {e}",
+                    MAX_RETRIES + 1
+                );
+            }
+            eprintln!("  boundary violation, retrying...");
+            messages.push(Message {
+                role: "user".to_string(),
+                content: format!(
+                    "That code violates the compilation boundary: {e}\n\n\
+                     Do NOT construct File, use RuntimeKey, or reference jevsr.\n\
+                     Access resources through `res.fs`.\n\n\
+                     Fix ALL issues and output the complete corrected tasks.rs. \
+                     No markdown fences, no explanation."
+                ),
+            });
+            continue;
+        }
+
         // Write and try to compile
         let plan_dir = write_plan(&id, &code)?;
         match try_build(&plan_dir) {
@@ -266,12 +317,11 @@ async fn plan_and_compile(task: &str) -> Result<(PathBuf, String)> {
                     );
                 }
                 eprintln!("  compile error, retrying...");
-                // Feed error back as user message
                 messages.push(Message {
                     role: "user".to_string(),
                     content: format!(
                         "That code failed to compile. \
-                         Fix ALL errors and output the complete corrected main.rs. \
+                         Fix ALL errors and output the complete corrected tasks.rs. \
                          No markdown fences, no explanation.\n\n\
                          Compiler errors:\n{stderr}"
                     ),
@@ -283,7 +333,7 @@ async fn plan_and_compile(task: &str) -> Result<(PathBuf, String)> {
     unreachable!()
 }
 
-fn write_plan(id: &str, code: &str) -> Result<PathBuf> {
+fn write_plan(id: &str, tasks_code: &str) -> Result<PathBuf> {
     let root = workspace_root();
     let plan_dir = plans_dir().join(id);
     let src_dir = plan_dir.join("src");
@@ -291,7 +341,7 @@ fn write_plan(id: &str, code: &str) -> Result<PathBuf> {
 
     let cargo_toml = format!(
         r#"[package]
-name = "plan-{id}"
+name = "plan{id}"
 version = "0.1.0"
 edition = "2021"
 
@@ -299,14 +349,41 @@ edition = "2021"
 
 [dependencies]
 jevs = {{ path = "{jevs_path}" }}
+jevsr = {{ path = "{jevsr_path}" }}
 tokio = {{ version = "1", features = ["full"] }}
 anyhow = "1"
 "#,
         jevs_path = root.join("jevs").display(),
+        jevsr_path = root.join("jevsr").display(),
     );
 
     std::fs::write(plan_dir.join("Cargo.toml"), cargo_toml)?;
-    std::fs::write(src_dir.join("main.rs"), code)?;
+
+    // Symlink main.rs → plan_main.rs
+    let main_link = src_dir.join("main.rs");
+    if main_link.exists() || main_link.symlink_metadata().is_ok() {
+        std::fs::remove_file(&main_link)?;
+    }
+    std::os::unix::fs::symlink(
+        root.join("plan_main.rs"),
+        &main_link,
+    )?;
+
+    // Generate resources.rs
+    let resources_code = r#"pub struct Resources {
+    pub fs: jevs::File,
+}
+
+pub fn create() -> Resources {
+    Resources {
+        fs: jevsr::open_file("."),
+    }
+}
+"#;
+    std::fs::write(src_dir.join("resources.rs"), resources_code)?;
+
+    // Write LLM-generated tasks.rs
+    std::fs::write(src_dir.join("tasks.rs"), tasks_code)?;
 
     Ok(plan_dir)
 }
@@ -332,7 +409,7 @@ fn binary_path(plan_dir: &Path) -> PathBuf {
     plan_dir
         .join("target")
         .join("release")
-        .join(format!("plan-{bin_name}"))
+        .join(format!("plan{bin_name}"))
 }
 
 fn run_binary(binary: &Path) -> Result<()> {
@@ -370,7 +447,7 @@ async fn main() -> Result<()> {
             let (plan_dir, code) = plan_and_compile(&task).await?;
             let id = plan_dir.file_name().unwrap().to_str().unwrap();
             eprintln!("\nPlan {id} written to {}", plan_dir.display());
-            eprintln!("--- generated code ---");
+            eprintln!("--- generated tasks.rs ---");
             println!("{code}");
             eprintln!("--- end ---");
             eprintln!("\nRun with: jev run {id}");
@@ -387,7 +464,7 @@ async fn main() -> Result<()> {
         Command::Go { task } => {
             eprintln!("Planning: {task}");
             let (plan_dir, code) = plan_and_compile(&task).await?;
-            eprintln!("\n--- generated code ---");
+            eprintln!("\n--- generated tasks.rs ---");
             println!("{code}");
             eprintln!("--- end ---\n");
 

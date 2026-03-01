@@ -24,3 +24,22 @@ impl<T> Verified<T> {
         self.0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verify_flow() {
+        let raw = Unverified("secret");
+        let checked = raw.verify();
+        assert_eq!(*checked.inner(), "secret");
+    }
+
+    #[test]
+    fn into_inner_consumes() {
+        let raw = Unverified(42);
+        let val = raw.verify().into_inner();
+        assert_eq!(val, 42);
+    }
+}

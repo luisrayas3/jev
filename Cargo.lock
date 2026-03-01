@@ -642,6 +642,7 @@ dependencies = [
  "anyhow",
  "clap",
  "jevs",
+ "jevsr",
  "reqwest",
  "serde",
  "serde_json",
@@ -654,7 +655,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "glob",
+ "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "jevsr"
+version = "0.1.0"
+dependencies = [
+ "jevs",
 ]
 
 [[package]]
