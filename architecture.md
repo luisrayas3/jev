@@ -633,7 +633,7 @@ it isn't trustworthy.
 - Compilation boundary via `RuntimeKey` +
   `check_boundary()` rejection of jevsr in task code
 - Split plan into `resources.rs` + `tasks.rs`
-- Fixed orchestrator-generated `main.rs` (symlink)
+- Fixed orchestrator-generated `main.rs` (embedded asset)
 - `jevsr` runtime crate for resource constructors
 - Per-module `API_DOCS` + `jevs::api::catalog()`
 - Qualified imports (no `use jevs::*`)

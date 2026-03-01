@@ -79,10 +79,10 @@ Access resources through `res.fs`, not by constructing them.
 
 const SYSTEM_PROMPT: &str = r#"You are a Rust code generator for the jev agent system.
 
-You receive a task description and produce the body of a `tasks.rs` module that accomplishes the task using the jevs library.
+Wrap your output in a ```rust``` fenced code block.
+Output ONLY the fenced code block — no explanation, no commentary.
 
 Rules:
-- Output ONLY raw Rust source code. No markdown fences. No explanation. No commentary.
 - Start with `use crate::resources::Resources;` and any needed qualified imports (e.g. `use jevs::text::line_count;`).
 - Do NOT use `use jevs::*;` — use qualified paths like `jevs::file::File`, `jevs::text::line_count`, `jevs::trust::Unverified`.
 - Implement `pub async fn root(res: &mut Resources) -> anyhow::Result<()>`
@@ -189,6 +189,16 @@ fn check_boundary(code: &str) -> Result<()> {
     Ok(())
 }
 
+fn strip_fences(code: &str) -> Result<String> {
+    let s = code.trim();
+    let s = s.strip_prefix("```rust")
+        .or_else(|| s.strip_prefix("```"))
+        .context("response missing opening ```rust fence")?;
+    let s = s.strip_suffix("```")
+        .context("response missing closing ``` fence")?;
+    Ok(s.trim().to_string())
+}
+
 const MAX_RETRIES: usize = 3;
 
 /// Generate code, write it, compile it.
@@ -233,6 +243,7 @@ async fn plan_and_compile(task: &str) -> Result<(PathBuf, String)> {
 
         eprintln!("  attempt {}/{}", attempt + 1, MAX_RETRIES + 1);
         let code = call_llm_raw(&client, &api_key, &messages).await?;
+        let code = strip_fences(&code)?;
 
         // Log the conversation so far + response
         messages.push(Message {
@@ -256,8 +267,8 @@ async fn plan_and_compile(task: &str) -> Result<(PathBuf, String)> {
                     "That code violates the compilation boundary: {e}\n\n\
                      Do NOT construct File, use RuntimeKey, or reference jevsr.\n\
                      Access resources through `res.fs`.\n\n\
-                     Fix ALL issues and output the complete corrected tasks.rs. \
-                     No markdown fences, no explanation."
+                     Fix ALL issues and output the complete corrected tasks.rs \
+                     in a ```rust``` fenced code block. No explanation."
                 ),
             });
             continue;
@@ -283,8 +294,8 @@ async fn plan_and_compile(task: &str) -> Result<(PathBuf, String)> {
                     role: "user".to_string(),
                     content: format!(
                         "That code failed to compile. \
-                         Fix ALL errors and output the complete corrected tasks.rs. \
-                         No markdown fences, no explanation.\n\n\
+                         Fix ALL errors and output the complete corrected tasks.rs \
+                         in a ```rust``` fenced code block. No explanation.\n\n\
                          Compiler errors:\n{stderr}"
                     ),
                 });
@@ -321,14 +332,10 @@ anyhow = "1"
 
     std::fs::write(plan_dir.join("Cargo.toml"), cargo_toml)?;
 
-    // Symlink main.rs → plan_main.rs
-    let main_link = src_dir.join("main.rs");
-    if main_link.exists() || main_link.symlink_metadata().is_ok() {
-        std::fs::remove_file(&main_link)?;
-    }
-    std::os::unix::fs::symlink(
-        root.join("plan_main.rs"),
-        &main_link,
+    // Write main.rs from embedded asset
+    std::fs::write(
+        src_dir.join("main.rs"),
+        include_str!("../assets/plan_main.rs"),
     )?;
 
     // Generate resources.rs
@@ -392,11 +399,34 @@ fn build_plan(plan_dir: &Path) -> Result<PathBuf> {
     Ok(binary_path(plan_dir))
 }
 
-fn confirm(prompt: &str) -> bool {
-    eprint!("{prompt} [y/N] ");
+fn resources_code(plan_dir: &Path) -> Result<String> {
+    std::fs::read_to_string(plan_dir.join("src/resources.rs"))
+        .context("reading resources.rs")
+}
+
+fn tasks_code(plan_dir: &Path) -> Result<String> {
+    std::fs::read_to_string(plan_dir.join("src/tasks.rs"))
+        .context("reading tasks.rs")
+}
+
+fn show_resources(plan_dir: &Path) -> Result<()> {
+    let code = resources_code(plan_dir)?;
+    eprintln!("--- resources.rs ---");
+    eprint!("{code}");
+    eprintln!("--- end ---");
+    Ok(())
+}
+
+/// Prompt for action. Returns 'y' (approve), 't' (show tasks), or 'n' (abort).
+fn prompt_action() -> char {
+    eprint!("Approve? [y/N/t=show tasks] ");
     let mut input = String::new();
     std::io::stdin().read_line(&mut input).ok();
-    matches!(input.trim(), "y" | "Y" | "yes")
+    match input.trim() {
+        "y" | "Y" | "yes" => 'y',
+        "t" | "T" => 't',
+        _ => 'n',
+    }
 }
 
 #[tokio::main]
@@ -406,12 +436,10 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Plan { task } => {
             eprintln!("Planning: {task}");
-            let (plan_dir, code) = plan_and_compile(&task).await?;
+            let (plan_dir, _code) = plan_and_compile(&task).await?;
             let id = plan_dir.file_name().unwrap().to_str().unwrap();
-            eprintln!("\nPlan {id} written to {}", plan_dir.display());
-            eprintln!("--- generated tasks.rs ---");
-            println!("{code}");
-            eprintln!("--- end ---");
+            eprintln!("\nPlan {id}");
+            show_resources(&plan_dir)?;
             eprintln!("\nRun with: jev run {id}");
         }
         Command::Run { id } => {
@@ -425,17 +453,28 @@ async fn main() -> Result<()> {
         }
         Command::Go { task } => {
             eprintln!("Planning: {task}");
-            let (plan_dir, code) = plan_and_compile(&task).await?;
-            eprintln!("\n--- generated tasks.rs ---");
-            println!("{code}");
-            eprintln!("--- end ---\n");
+            let (plan_dir, _code) = plan_and_compile(&task).await?;
+            eprintln!();
+            show_resources(&plan_dir)?;
 
-            if !confirm("Build and run?") {
-                eprintln!("Aborted.");
-                return Ok(());
+            loop {
+                match prompt_action() {
+                    'y' => {
+                        run_binary(&binary_path(&plan_dir))?;
+                        break;
+                    }
+                    't' => {
+                        let code = tasks_code(&plan_dir)?;
+                        eprintln!("--- tasks.rs ---");
+                        eprint!("{code}");
+                        eprintln!("--- end ---");
+                    }
+                    _ => {
+                        eprintln!("Aborted.");
+                        break;
+                    }
+                }
             }
-
-            run_binary(&binary_path(&plan_dir))?;
         }
     }
 

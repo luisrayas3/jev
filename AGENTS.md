@@ -156,6 +156,14 @@ Treat acronyms and initialisms as words in identifiers.
 - Prefer `&str` over `String` in function parameters
 - Follow camel case definition: `HttpClient`, `ApiKey`
 - Keep `use` statements grouped: std, external, internal
+- `jevs` public API must never panic —
+  always return `Result` or `Option`
+  so plans are forced to handle errors
+
+#### Fish
+
+- Use 2-space indentation
+- Use lowercase for locals, prefer locals to globals
 
 ## Memorized commands
 
@@ -224,7 +232,7 @@ with decisions and changes from this session
 - Compilation boundary:
   `RuntimeKey` guards resource construction,
   `check_boundary()` rejects jevsr in task code
-- Plan structure: `main.rs` (symlink) +
+- Plan structure: `main.rs` (embedded asset) +
   `resources.rs` (generated) + `tasks.rs` (LLM)
 - Qualified imports (`jevs::file::File`,
   not `use jevs::*`)

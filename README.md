@@ -20,7 +20,7 @@ jevsr/                  -- runtime crate (resource constructors)
 jev/                    -- CLI binary
 ├── src/
 │   └── main.rs         -- plan / run / go commands
-plan_main.rs            -- fixed shim symlinked into plans
+jev/assets/plan_main.rs -- fixed shim written into plans
 plans/                  -- generated programs land here
 tests/
 ├── e2e.fish            -- full pipeline test (fish)
