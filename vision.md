@@ -1,8 +1,8 @@
 # Vision
 
 jev is an AI assistant you can trust
-with your real resources —
-email, calendar, files, messages, accounts —
+with your real resources
+(email, calendar, files, messages, accounts)
 because permissions are compiler-enforced,
 not prompt-based.
 
@@ -29,7 +29,7 @@ When you describe a task,
 jev decomposes it into a tree of subtasks,
 each declaring what resources it needs.
 All resource requirements bubble up
-to a single permission manifest —
+to a single permission manifest:
 a flat, readable list of grants
 (read `/data`, write `/output`, etc.).
 You approve the permissions,
@@ -39,13 +39,13 @@ the plan can't exceed them.
 Resource constructors live in a dedicated module
 that only the orchestrator controls.
 Task code receives resources as function parameters
-and literally cannot construct new ones —
+and literally cannot construct new ones;
 the symbols aren't available at compile time.
 The plan runs in a container
 where only approved resources are mounted.
 
-Deterministic work — filtering, transforming,
-aggregating — runs as compiled native code.
+Deterministic work (filtering, transforming,
+aggregating) runs as compiled native code.
 Reasoning work runs as LLM calls,
 each scoped to only the resources it needs.
 The right-sized model handles each subtask:
@@ -129,7 +129,7 @@ that hijack the LLM into unauthorized actions.
 jev's defense is structural:
 the compiler enforces resource boundaries
 *before* any untrusted content is seen.
-A task that reads email cannot send email —
+A task that reads email cannot send email,
 not because the LLM follows instructions,
 but because `&EmailInbox` has no `send` method.
 Injected instructions can corrupt reasoning
@@ -176,7 +176,7 @@ is the mitigation, not prevention.
 
 User data flows through LLM calls.
 jev constrains *which* data reaches *which* call
-via resource scoping —
+via resource scoping:
 a subtask only sees the resources
 passed to it as parameters.
 
@@ -219,5 +219,5 @@ The container enforces it at runtime.
 
 Plans are saveable, rerunnable,
 versionable, and shareable.
-The plan is the artifact —
+The plan is the artifact:
 auditable, reproducible, and proven safe.

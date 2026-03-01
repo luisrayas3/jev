@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// jev — agent orchestration via Rust code generation
+/// jev - agent orchestration via Rust code generation
 #[derive(Parser)]
 #[command(name = "jev")]
 struct Cli {
@@ -80,18 +80,18 @@ Access resources through `res.fs`, not by constructing them.
 const SYSTEM_PROMPT: &str = r#"You are a Rust code generator for the jev agent system.
 
 Wrap your output in a ```rust``` fenced code block.
-Output ONLY the fenced code block — no explanation, no commentary.
+Output ONLY the fenced code block: no explanation, no commentary.
 
 Rules:
 - Start with `use crate::resources::Resources;` and any needed qualified imports (e.g. `use jevs::text::line_count;`).
-- Do NOT use `use jevs::*;` — use qualified paths like `jevs::file::File`, `jevs::text::line_count`, `jevs::trust::Unverified`.
+- Do NOT use `use jevs::*;` - use qualified paths like `jevs::file::File`, `jevs::text::line_count`, `jevs::trust::Unverified`.
 - Implement `pub async fn root(res: &mut Resources) -> anyhow::Result<()>`
 - Access the filesystem through `res.fs` (it's a `jevs::file::File`).
 - Do NOT construct File, use RuntimeKey, or reference jevsr. Resources are pre-constructed.
 - `res.fs.read()` and `res.fs.glob()` take `&self` (shared read access).
 - `res.fs.write()` takes `&mut self` (exclusive write access).
 - Use `tokio::join!` for parallel reads.
-- Never combine `&` and `&mut` access in the same join — it won't compile.
+- Never combine `&` and `&mut` access in the same join; it won't compile.
 - Print results to stdout so the user can see them.
 "#;
 

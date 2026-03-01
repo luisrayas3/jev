@@ -32,7 +32,7 @@ cleanup_plan $root
 if string match -q "*jev-e2e-ok*" -- $output
   echo "  PASSED"
 else
-  echo "  FAILED — output: $output"
+  echo "  FAILED - output: $output"
   set failed 1
 end
 
@@ -53,7 +53,7 @@ set -l lower (string lower -- $output)
 if string match -q "*no*" -- $lower
   echo "  PASSED"
 else
-  echo "  FAILED — output: $output"
+  echo "  FAILED - output: $output"
   set failed 1
 end
 

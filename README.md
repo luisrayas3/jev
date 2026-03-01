@@ -1,7 +1,7 @@
 # jev
 
 Agent orchestration where the planner outputs Rust code.
-`rustc` is the compiler — type errors = invalid plan.
+`rustc` is the compiler; type errors = invalid plan.
 
 ## Project structure
 

@@ -20,7 +20,7 @@ The core insight is that `rustc` is the safety checker:
 type errors = invalid plan,
 the borrow checker enforces grant safety,
 and trust levels are types.
-No custom IR, no interpreter — Rust is the whole story.
+No custom IR, no interpreter; Rust is the whole story.
 
 Key architectural decisions:
 - Task code receives resources as parameters,
@@ -102,6 +102,11 @@ Examples:
 - "Documentation style guide" (correct)
 - "Documentation Style Guide" (incorrect)
 
+### Punctuation
+
+Never use em dashes.
+Use commas, semicolons, colons, or parentheses instead.
+
 ### Writing style
 
 Keep phrasing concise and straightforward.
@@ -156,7 +161,7 @@ Treat acronyms and initialisms as words in identifiers.
 - Prefer `&str` over `String` in function parameters
 - Follow camel case definition: `HttpClient`, `ApiKey`
 - Keep `use` statements grouped: std, external, internal
-- `jevs` public API must never panic —
+- `jevs` public API must never panic;
   always return `Result` or `Option`
   so plans are forced to handle errors
 
@@ -207,7 +212,7 @@ with decisions and changes from this session
 - Generated plan projects live in `plans/` and are
   gitignored (`plans/*/target`); the plans themselves
   are ephemeral
-- The `jevs` API surface is the core product —
+- The `jevs` API surface is the core product;
   changes there should be deliberate and well-considered
 - Each jevs module has `pub const API_DOCS`
   documenting its API; `jevs::api::catalog()`

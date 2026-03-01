@@ -5,14 +5,14 @@
 jev is an agent orchestrator
 with two core loops:
 
-1. **Planning loop** — decomposes a task
+1. **Planning loop**: decomposes a task
    into a tree of subtasks,
    each declaring its resource needs.
    Dependencies resolve upward to a root
    that declares all external resources.
    The plan compiles or it doesn't ship.
 
-2. **Execution loop** — the compiled plan runs
+2. **Execution loop**: the compiled plan runs
    in a container
    where only approved resources are mounted.
    LLM subagents handle fuzzy reasoning,
@@ -22,7 +22,7 @@ The Rust type system and borrow checker
 enforce resource access, trust levels,
 and subagent capabilities at compile time.
 A separate compilation boundary ensures
-task code cannot construct resources —
+task code cannot construct resources;
 only the orchestrator-controlled root can.
 
 ## Design principles
@@ -39,7 +39,7 @@ no hoping the LLM follows instructions.
 Task code receives resources as function parameters.
 Resource constructors live in a separate module
 compiled with different symbol visibility.
-Task code literally cannot name constructors —
+Task code literally cannot name constructors;
 they aren't in scope.
 This is a compilation boundary, not a convention.
 
@@ -52,7 +52,7 @@ A summarizer receives `&File` (read-only).
 A report writer receives `&mut File`
 scoped to an output directory.
 A notification task receives `&EmailOutbox<"addr">`
-but never an inbox handle —
+but never an inbox handle;
 it can send but not snoop.
 An `UntrustedWeb` read returns `Unverified<T>`;
 a `TrustedFile` read doesn't.
@@ -69,7 +69,7 @@ or not at all.
 
 **Compiled code for deterministic work.**
 Data transforms, filtering, aggregation,
-format conversion, file I/O patterns —
+format conversion, file I/O patterns;
 these don't need LLM reasoning.
 They compile to native code and run fast.
 Other orchestrators either waste LLM calls
@@ -82,7 +82,7 @@ How the plan gets iterated,
 what permissions the planner has,
 how the human reviews and approves,
 how to maximize convenience
-while maintaining safety —
+while maintaining safety;
 this is opinionated design work,
 not an afterthought.
 
@@ -109,7 +109,7 @@ PHASE 1: EXPAND DOWN (task decomposition)
     |
     |  Root planner decomposes task into subtasks
     |  Subtasks decompose further (tree grows down)
-    |  No resource thinking yet — just what needs to happen
+    |  No resource thinking yet - just what needs to happen
     |
     v
 PHASE 2: IMPLEMENT LEAVES (parallelizable)
@@ -162,7 +162,7 @@ not a single LLM call.
 **Phase 1: Expand down.**
 The root planner decomposes the task
 into a tree of subtasks.
-This is cheap and high-level —
+This is cheap and high-level:
 just task descriptions, no code.
 Subtasks can decompose further.
 
@@ -178,7 +178,7 @@ and parallelizable.
 Each leaf declares its resource needs.
 Dependencies propagate to parents via structs.
 When two siblings need the same resource,
-it can't live in both child structs —
+it can't live in both child structs;
 the parent keeps it in its own struct
 and lends it explicitly.
 The borrow checker forces the parent
@@ -209,7 +209,7 @@ not the whole tree.
 The compiled plan orchestrates LLM calls at runtime.
 These calls are typed and resource-constrained:
 
-**Specialized subagents** — highly typed interfaces.
+**Specialized subagents**: highly typed interfaces.
 A classifier might have a concrete enum return type
 and use a small, cheap, fast model
 (possibly running locally).
@@ -222,7 +222,7 @@ enum Sentiment { Positive, Neutral, Negative }
 let result: Sentiment = classify(&text).await;
 ```
 
-**General subagents** — frontier models
+**General subagents**: frontier models
 with broader capabilities
 but still resource-constrained.
 They receive specific resources via function arguments,
@@ -237,7 +237,7 @@ let summary = summarize(&fs, &files).await;
 generate_report(&mut out_fs, &data).await;
 ```
 
-**No subagent needed** — deterministic work
+**No subagent needed**: deterministic work
 compiles to native code.
 Data transforms, filtering, aggregation,
 string manipulation, format conversion.
@@ -247,7 +247,7 @@ often waste LLM calls on.
 
 **Runtime safety within the capability envelope.**
 The type system constrains
-what a subagent *can* access —
+what a subagent *can* access;
 a summarizer that receives `&Fs`
 can't send email.
 Within that envelope,
@@ -267,7 +267,7 @@ but adds latency for simple tasks.
 "Do it" mode is an opt-in fast path
 for cases where the full flow is overkill.
 
-The user explicitly triggers "do it" mode —
+The user explicitly triggers "do it" mode;
 it is never automatic, always a conscious choice.
 
 - Smaller model specialized for one-liner plans
@@ -292,7 +292,7 @@ Exposes two layers:
 - **Operations** (default): `read`, `write`, `glob`, etc.
   Available to all task code.
 - **Constructors** (`File::open`, etc.):
-  Require `RuntimeKey` — not available in task code.
+  Require `RuntimeKey`, not available in task code.
 Each module has `pub const API_DOCS`
 documenting its API for the planner.
 `jevs::api::catalog()` aggregates all module docs.
@@ -315,7 +315,7 @@ Uses jevs types and resource handles.
 When the planner generates a useful function,
 it can be promoted into jevu
 for reuse across future plans.
-Grows organically from real usage —
+Grows organically from real usage:
 a personal library of proven patterns.
 
 **plans/** (generated):
@@ -325,7 +325,7 @@ with a path dependency on `jevs`
 
 ## Technology choices
 
-**Rust** — the orchestration language.
+**Rust**: the orchestration language.
 Chosen because the type system and borrow checker
 provide compile-time safety guarantees
 for resource access and subagent capabilities.
@@ -333,18 +333,18 @@ Also: compiled plans run fast,
 which matters when interleaving
 native transforms with LLM calls.
 
-**tokio** — async runtime.
+**tokio**: async runtime.
 Enables parallel subagent calls and I/O
 while the borrow checker prevents
 unsafe concurrent access.
 
-**clap** — CLI argument parsing.
+**clap**: CLI argument parsing.
 
-**reqwest** — HTTP client for LLM API calls.
+**reqwest**: HTTP client for LLM API calls.
 
-**anyhow** — error handling.
+**anyhow**: error handling.
 
-**glob** — file pattern matching.
+**glob**: file pattern matching.
 
 ## Data architecture
 
@@ -368,7 +368,7 @@ fn write_report(fs: &mut File) { ... } // write
 
 **Service resources use capability-typed handles.**
 For services like email, calendar, and web,
-`&`/`&mut` is too coarse —
+`&`/`&mut` is too coarse;
 reading and sending email
 are different permissions on the same service,
 not shared vs exclusive access.
@@ -387,7 +387,7 @@ fn task(
 The permission boundary is the type,
 not the reference mode.
 The borrow checker still ensures
-a task holds the handle —
+a task holds the handle;
 a function that doesn't receive `EmailOutbox`
 can't send email, period.
 
@@ -414,8 +414,8 @@ via a compilation boundary.
 
 **Stash is plan-local content-addressed storage.**
 Plans sometimes need to materialize
-intermediate results to disk —
-too large for memory,
+intermediate results to disk,
+too large for memory
 or shared between plan components.
 `Stash` provides local working memory
 with content-addressed semantics:
@@ -427,7 +427,7 @@ let handle = stash.put(&large_data)?;  // -> Hash
 let data = stash.get(&handle)?;
 ```
 
-No naming, no paths, no conflicts —
+No naming, no paths, no conflicts;
 the hash is the reference.
 Stash is allocated by the runtime,
 scoped to the plan's execution,
@@ -435,7 +435,7 @@ and cleaned up afterward.
 It requires no resource grant
 because it's internal working memory,
 not access to external resources.
-Stash is always local —
+Stash is always local;
 network-backed storage is a resource.
 
 ### Resource scoping
@@ -446,28 +446,28 @@ making both compile-time constraints.
 
 **Filesystem**: scoped by root path,
 split by trust level.
-`TrustedFile<"/data">` — known-good local files,
+`TrustedFile<"/data">`: known-good local files,
 data usable directly.
-`UntrustedFile<"/uploads">` — external input,
+`UntrustedFile<"/uploads">`: external input,
 operations return `Unverified<T>`.
 
 **Web**: scoped by domain,
 split by trust level.
-`TrustedWeb<"internal.company.com">` —
+`TrustedWeb<"internal.company.com">`:
 known-good source, data usable directly.
-`UntrustedWeb<"reddit.com">` —
+`UntrustedWeb<"reddit.com">`:
 operations return `Unverified<T>`.
 Domain-level scoping balances specificity
 (auditable grants)
 with practicality (URLs are dynamic).
 
 **Email**: scoped by account and filtered by sender.
-`TrustedEmailInbox<"luis@x.com", ["alice@y.com"]>` —
+`TrustedEmailInbox<"luis@x.com", ["alice@y.com"]>`:
 reads that inbox, filtered to trusted senders,
 data usable directly.
-`UntrustedEmailInbox` — external sources,
+`UntrustedEmailInbox`: external sources,
 returns `Unverified<T>`.
-`EmailOutbox<"luis@x.com">` — sends from that address;
+`EmailOutbox<"luis@x.com">`: sends from that address;
 recipient must be a `TrustedRecipient`.
 Backed by a contact book
 with per-contact settings and roles,
@@ -537,8 +537,8 @@ based on user configuration
 (which domains, senders, paths are trusted).
 
 **Data-level trust** wraps values:
-- `Unverified<T>` — data from untrusted resources
-- `Verified<T>` — human-confirmed data
+- `Unverified<T>`: data from untrusted resources
+- `Verified<T>`: human-confirmed data
 - `.verify()` triggers real human confirmation
   (not a no-op cast)
 - Functions requiring trust take `Verified<T>`;
@@ -548,7 +548,7 @@ The two levels connect:
 trusted resources produce usable data,
 untrusted resources produce `Unverified<T>`,
 and sensitive operations (like `EmailOutbox::send`)
-require `TrustedRecipient` —
+require `TrustedRecipient`,
 verified via the contact book,
 not raw addresses.
 

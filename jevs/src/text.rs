@@ -1,4 +1,4 @@
-pub const API_DOCS: &str = r#"## Text — pure functions
+pub const API_DOCS: &str = r#"## Text - pure functions
 
 ```rust
 let n = jevs::text::line_count("hello\nworld"); // 2

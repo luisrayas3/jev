@@ -2,22 +2,22 @@ use crate::runtime::RuntimeKey;
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
-pub const API_DOCS: &str = r#"## Filesystem — `jevs::file::File`
+pub const API_DOCS: &str = r#"## Filesystem - `jevs::file::File`
 
 ```rust
-// Read a file (shared ref — can parallelize reads)
+// Read a file (shared ref, can parallelize reads)
 let content: String = res.fs.read("file.txt").await?;
 
 // Glob for files (shared ref)
 let files: Vec<String> = res.fs.glob("*.rs").await?;
 
-// Write a file (exclusive ref — no concurrent access)
+// Write a file (exclusive ref, no concurrent access)
 res.fs.write("out.txt", "content").await?;
 ```
 
 Key: `&File` = read, `&mut File` = write.
 Multiple reads can run in parallel via `tokio::join!`.
-A write requires exclusive access —
+A write requires exclusive access;
 no concurrent reads or writes.
 
 Do NOT construct File yourself.
@@ -36,7 +36,7 @@ pub struct File {
 
 impl File {
     /// Open a filesystem resource rooted at `root`.
-    /// Requires a `RuntimeKey` — not available in generated task code.
+    /// Requires a `RuntimeKey`, not available in generated task code.
     pub fn open(key: RuntimeKey, root: &str) -> Self {
         let _ = key;
         let root = std::fs::canonicalize(root)
@@ -48,7 +48,7 @@ impl File {
         self.root.join(path)
     }
 
-    /// Read a file's contents. Takes `&self` — shared read access.
+    /// Read a file's contents. Takes `&self`, shared read access.
     pub async fn read(&self, path: &str) -> Result<String> {
         let full = self.resolve(path);
         tokio::fs::read_to_string(&full)
@@ -56,7 +56,7 @@ impl File {
             .with_context(|| format!("reading {}", full.display()))
     }
 
-    /// Write content to a file. Takes `&mut self` — exclusive write access.
+    /// Write content to a file. Takes `&mut self`, exclusive write access.
     pub async fn write(&mut self, path: &str, content: &str) -> Result<()> {
         let full = self.resolve(path);
         if let Some(parent) = full.parent() {
@@ -67,7 +67,7 @@ impl File {
             .with_context(|| format!("writing {}", full.display()))
     }
 
-    /// Glob for files matching a pattern. Takes `&self` — shared read access.
+    /// Glob for files matching a pattern. Takes `&self`, shared read access.
     pub async fn glob(&self, pattern: &str) -> Result<Vec<String>> {
         let full_pattern = self.root.join(pattern);
         let pattern_str = full_pattern

@@ -18,8 +18,8 @@ Passing `Unverified<T>` is a compile error.
 pub struct Unverified<T>(pub T);
 
 /// Data that has been human-confirmed or otherwise validated.
-/// Sensitive operations require `Verified<T>` — passing `Unverified<T>`
-/// is a compile error.
+/// Sensitive operations require `Verified<T>`;
+/// passing `Unverified<T>` is a compile error.
 pub struct Verified<T>(pub T);
 
 impl<T> Unverified<T> {
