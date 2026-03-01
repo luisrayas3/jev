@@ -22,6 +22,16 @@ the borrow checker enforces grant safety,
 and trust levels are types.
 No custom IR, no interpreter — Rust is the whole story.
 
+Key architectural decisions:
+- Task code receives resources as parameters,
+  never constructs them (compilation boundary)
+- Plans decompose into task trees;
+  resources resolve upward to a single root
+- The user approves a permission manifest,
+  not source code
+- Plans run in containers
+  where only approved resources are mounted
+
 This project is in early development / concepting phase.
 Schemas and APIs can break freely.
 
@@ -190,10 +200,10 @@ with decisions and changes from this session
 - Generated plan projects live in `plans/` and are
   gitignored (`plans/*/target`); the plans themselves
   are ephemeral
-- The `jevstd` API surface is the core product —
+- The `jevs` API surface is the core product —
   changes there should be deliberate and well-considered
 - The planner prompt in `jev/src/main.rs` must stay
-  in sync with the actual `jevstd` public API
+  in sync with the actual `jevs` public API
 
 ## Current status
 
@@ -203,15 +213,26 @@ with decisions and changes from this session
 - Scope: filesystem, text, and trust types only
 
 **What's implemented**:
-- `jevstd` library with `Fs`, `text`, and trust types
+- `jevs` library with `Fs`, `text`, and trust types
 - `jev` CLI with `plan`, `run`, and `go` subcommands
 - LLM integration via Anthropic API
 - Generated plan project scaffolding
+- Compile error feedback loop
+  (retry with error context, up to 4 attempts)
 
-**What's NOT implemented**:
+**What's NOT implemented yet**
+(see architecture.md for phased roadmap):
+- Two-unit compilation
+  (`resources.rs` + `tasks.rs` split)
+- Task tree decomposition
+  (expand down / resolve up planning loop)
+- Permission manifest extraction and approval UX
+- Containerized execution
 - Additional resource types
   (email, calendar, knowledge base, HTTP)
 - Auto-generated API catalog from crate docs
-- Plan history and management
-- Compile error feedback loop
-  (retry with error context)
+- Subagent call interface
+- Trust type `.verify()` as real human confirmation
+- jevu user utility library
+  (reusable functions from prior plans)
+- "Do it" mode (opt-in fast path)

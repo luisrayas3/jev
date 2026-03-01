@@ -6,7 +6,7 @@ Agent orchestration where the planner outputs Rust code.
 ## Project structure
 
 ```
-jevstd/                 -- library crate (typed resource APIs)
+jevs/                 -- library crate (typed resource APIs)
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs          -- re-exports
@@ -17,6 +17,7 @@ jev/                    -- CLI binary
 ├── Cargo.toml
 ├── src/
 │   └── main.rs         -- plan / run / go commands
+jevu/                   -- user utility library (future)
 plans/                  -- generated programs land here
 ```
 

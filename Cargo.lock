@@ -641,7 +641,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "jevstd",
+ "jevs",
  "reqwest",
  "serde",
  "serde_json",
@@ -649,7 +649,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "jevstd"
+name = "jevs"
 version = "0.1.0"
 dependencies = [
  "anyhow",

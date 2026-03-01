@@ -67,9 +67,9 @@ fn latest_plan() -> Result<String> {
 }
 
 const API_CATALOG: &str = r#"
-# jevstd API
+# jevs API
 
-## Filesystem — `jevstd::Fs`
+## Filesystem — `jevs::Fs`
 
 ```rust
 // Open a filesystem rooted at a directory
@@ -92,8 +92,8 @@ A write requires exclusive access — no concurrent reads or writes.
 ## Text — pure functions
 
 ```rust
-let n = jevstd::line_count("hello\nworld");  // 2
-let s = jevstd::concat(&["a", "b", "c"]);    // "abc"
+let n = jevs::line_count("hello\nworld");  // 2
+let s = jevs::concat(&["a", "b", "c"]);    // "abc"
 ```
 
 ## Trust types
@@ -111,11 +111,11 @@ Passing `Unverified<T>` is a compile error.
 
 const SYSTEM_PROMPT: &str = r#"You are a Rust code generator for the jev agent system.
 
-You receive a task description and produce a complete Rust `main.rs` that accomplishes the task using the jevstd library.
+You receive a task description and produce a complete Rust `main.rs` that accomplishes the task using the jevs library.
 
 Rules:
 - Output ONLY raw Rust source code. No markdown fences. No explanation. No commentary.
-- The program must be a complete `main.rs` with `use jevstd::*;`
+- The program must be a complete `main.rs` with `use jevs::*;`
 - Use `#[tokio::main]` for async main.
 - Use `anyhow::Result` for error handling.
 - `Fs::open(path)` returns `Fs` directly (not Result). Do NOT use `?` on it.
@@ -298,11 +298,11 @@ edition = "2021"
 [workspace]
 
 [dependencies]
-jevstd = {{ path = "{jevstd_path}" }}
+jevs = {{ path = "{jevs_path}" }}
 tokio = {{ version = "1", features = ["full"] }}
 anyhow = "1"
 "#,
-        jevstd_path = root.join("jevstd").display(),
+        jevs_path = root.join("jevs").display(),
     );
 
     std::fs::write(plan_dir.join("Cargo.toml"), cargo_toml)?;

@@ -26,15 +26,23 @@ the compiler proves before anything runs.
 ## How it works (in brief)
 
 When you describe a task,
-jev generates a plan as readable source code.
-The plan compiles or it doesn't run.
-The type system encodes
-what each part of the plan can access:
-read-only email, read-only calendar,
-write access scoped to a drafts folder.
-You review the plan, see exactly what it will do,
+jev decomposes it into a tree of subtasks,
+each declaring what resources it needs.
+All resource requirements bubble up
+to a single permission manifest —
+a flat, readable list of grants
+(read `/data`, write `/output`, etc.).
+You approve the permissions,
 and the compiler guarantees
-it can't do anything else.
+the plan can't exceed them.
+
+Resource constructors live in a dedicated module
+that only the orchestrator controls.
+Task code receives resources as function parameters
+and literally cannot construct new ones —
+the symbols aren't available at compile time.
+The plan runs in a container
+where only approved resources are mounted.
 
 Deterministic work — filtering, transforming,
 aggregating — runs as compiled native code.
@@ -109,10 +117,16 @@ that runtime-checked frameworks cannot match.
 ## The experience
 
 Describe a task in natural language.
-The system generates a plan you can read.
-The compiler verifies
-it respects your permission boundaries.
-You approve and it executes.
+The system decomposes it, plans each piece,
+and presents a permission manifest:
+what resources the plan will access,
+with what access mode, and why.
+You approve the permissions and it executes.
+
+You don't need to read generated code.
+The compiler proved the code can't exceed
+the permissions you approved.
+The container enforces it at runtime.
 
 Plans are saveable, rerunnable,
 versionable, and shareable.
