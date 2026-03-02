@@ -51,11 +51,68 @@ impl fmt::Display for Access {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum ClassificationLevel {
+    Public,
+    Private,
+}
+
+impl fmt::Display for ClassificationLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ClassificationLevel::Public => write!(f, "public"),
+            ClassificationLevel::Private => write!(f, "private"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum IntegrityLevel {
+    Me,
+    Friend,
+    World,
+}
+
+impl fmt::Display for IntegrityLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            IntegrityLevel::Me => write!(f, "me"),
+            IntegrityLevel::Friend => write!(f, "friend"),
+            IntegrityLevel::World => write!(f, "world"),
+        }
+    }
+}
+
+fn parse_classification(s: &str) -> Result<ClassificationLevel> {
+    match s {
+        "public" => Ok(ClassificationLevel::Public),
+        "private" => Ok(ClassificationLevel::Private),
+        other => bail!(
+            "unknown confidentiality \"{other}\"; \
+             expected public or private"
+        ),
+    }
+}
+
+fn parse_integrity(s: &str) -> Result<IntegrityLevel> {
+    match s {
+        "me" => Ok(IntegrityLevel::Me),
+        "friend" => Ok(IntegrityLevel::Friend),
+        "world" => Ok(IntegrityLevel::World),
+        other => bail!(
+            "unknown integrity \"{other}\"; \
+             expected me, friend, or world"
+        ),
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ResourceDecl {
     name: String,
     url: String,
     access: Access,
+    classification: ClassificationLevel,
+    integrity: IntegrityLevel,
 }
 
 #[derive(Deserialize)]
@@ -67,6 +124,8 @@ struct ResourceToml {
 struct ResourceEntry {
     url: String,
     access: String,
+    confidentiality: Option<String>,
+    integrity: Option<String>,
 }
 
 fn parse_access(s: &str) -> Result<Access> {
@@ -105,10 +164,24 @@ fn parse_resource_decls(toml_str: &str) -> Result<Vec<ResourceDecl>> {
         .map(|(name, entry)| {
             let (_, _, _) = parse_url(&entry.url)?;
             let access = parse_access(&entry.access)?;
+            let classification = entry
+                .confidentiality
+                .as_deref()
+                .map(parse_classification)
+                .transpose()?
+                .unwrap_or(ClassificationLevel::Private);
+            let integrity = entry
+                .integrity
+                .as_deref()
+                .map(parse_integrity)
+                .transpose()?
+                .unwrap_or(IntegrityLevel::Me);
             Ok(ResourceDecl {
                 name,
                 url: entry.url,
                 access,
+                classification,
+                integrity,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -116,15 +189,32 @@ fn parse_resource_decls(toml_str: &str) -> Result<Vec<ResourceDecl>> {
     Ok(decls)
 }
 
+fn label_types(
+    classification: &ClassificationLevel,
+    integrity: &IntegrityLevel,
+) -> String {
+    let c = match classification {
+        ClassificationLevel::Public => "jevs::label::Public",
+        ClassificationLevel::Private => "jevs::label::Private",
+    };
+    let i = match integrity {
+        IntegrityLevel::Me => "jevs::label::Me",
+        IntegrityLevel::Friend => "jevs::label::Friend",
+        IntegrityLevel::World => "jevs::label::World",
+    };
+    format!("<{c}, {i}>")
+}
+
 fn generate_resources_rs(decls: &[ResourceDecl]) -> String {
     let mut fields = String::new();
     let mut inits = String::new();
     for decl in decls {
         let (_, path, is_dir) = parse_url(&decl.url).expect("already validated");
+        let labels = label_types(&decl.classification, &decl.integrity);
         if is_dir {
             let path = path.trim_end_matches('/');
             fields.push_str(&format!(
-                "    pub {}: jevs::file::FileTree,\n",
+                "    pub {}: jevs::file::FileTree{labels},\n",
                 decl.name,
             ));
             inits.push_str(&format!(
@@ -133,7 +223,7 @@ fn generate_resources_rs(decls: &[ResourceDecl]) -> String {
             ));
         } else {
             fields.push_str(&format!(
-                "    pub {}: jevs::file::File,\n",
+                "    pub {}: jevs::file::File{labels},\n",
                 decl.name,
             ));
             inits.push_str(&format!(
@@ -225,17 +315,20 @@ Format:
 [resources.<name>]
 url = "<scheme>:<path>"
 access = "read" | "write" | "readwrite"
+confidentiality = "public" | "private"  # default: private
+integrity = "me" | "friend" | "world"   # default: me
 ```
 
 - `<name>` becomes a field on the Resources struct: `res.<name>` in your code.
 - URL scheme determines the resource kind. Only `file:` is supported for now.
 - `access` controls permissions: `read`, `write`, or `readwrite`.
+- `confidentiality` and `integrity` are labels. Defaults: `private` and `me` (user's own files).
 
 **Trailing `/` convention:**
 - `file:/tmp/foo` = single file → `jevs::file::File` (no path arg: `res.f.read()`, `res.f.write(content)`)
 - `file:./` or `file:/data/` = directory → `jevs::file::FileTree` (path arg: `res.fs.read("file.txt")`, `res.fs.write("file.txt", content)`)
 
-Example (directory tree + single file):
+Example:
 ```toml
 [resources.fs]
 url = "file:./"
@@ -259,19 +352,24 @@ Output TWO fenced blocks, in this order:
 Output ONLY these two blocks: no explanation, no commentary.
 
 Rules for the ```rust``` block:
-- Start with `use crate::resources::Resources;` and any needed qualified imports (e.g. `use jevs::text::line_count;`).
-- Do NOT use `use jevs::*;` - use qualified paths like `jevs::file::File`, `jevs::file::FileTree`, `jevs::text::line_count`, `jevs::label::Tainted`.
+- Start with `use crate::resources::Resources;` and any needed qualified imports (e.g. `use jevs::label::Labeled;`).
+- Do NOT use `use jevs::*;` - use qualified paths like `jevs::file::File`, `jevs::label::Labeled`.
 - Implement `pub async fn root(res: &mut Resources) -> anyhow::Result<()>`
 - Access resources through fields on `res` (e.g. `res.fs`). The field names match the resource names you declare in TOML.
 - For temporary storage, create a stash: `let stash = jevs::stash::Stash::new()?;`
 - Do NOT construct resources. They are provided via the Resources struct.
 - **File** (single file, no trailing `/` in URL): `res.<name>.read()` and `res.<name>.write(content)` — no path parameter.
 - **FileTree** (directory, trailing `/` in URL): `res.<name>.read(path)`, `res.<name>.write(path, content)`, `res.<name>.glob(pattern)` — path parameter required.
+- `read()` returns `Labeled<String>`. Use `.inner()` for `&String`, `.into_inner()` for owned `String`, or `.map(|s| ...)` to transform.
+- `write()` takes `Labeled<String>`. Labels must be compatible with the resource (same or less restrictive).
+- `glob()` returns `Vec<String>` (unlabeled paths).
+- Create local data with `jevs::label::Labeled::local("text".to_string())`.
+- Cross label boundaries: `.declassify().await?` (Private→Public), `.accredit::<Tier>().await?` (increase integrity).
 - `read()` and `glob()` take `&self` (shared read access).
 - `write()` takes `&mut self` (exclusive write access).
 - Use `tokio::join!` for parallel reads.
 - Never combine `&` and `&mut` access in the same join; it won't compile.
-- Print results to stdout so the user can see them.
+- Print results to stdout. Use `.inner()` or `.into_inner()` to extract values for printing.
 
 Rules for the ```toml``` block:
 - Declare each resource under `[resources.<name>]` with `url` and `access`.
@@ -279,6 +377,7 @@ Rules for the ```toml``` block:
 - Only `file:` URL scheme is supported.
 - Trailing `/` distinguishes type: `file:./` or `file:/data/` = directory (FileTree), `file:./config.toml` or `file:/tmp/foo` = single file (File).
 - Access: `read`, `write`, or `readwrite`.
+- Labels (optional): `confidentiality` = `public` or `private` (default: `private`), `integrity` = `me`, `friend`, or `world` (default: `me`).
 "#;
 
 // -- API types and LLM calls ------------------------------------------------
@@ -530,7 +629,10 @@ fn tasks_code(plan_dir: &Path) -> Result<String> {
 fn show_manifest(decls: &[ResourceDecl]) {
     eprintln!("This plan requires:\n");
     for decl in decls {
-        eprintln!("  {:<8} {:<16} {}", decl.name, decl.url, decl.access);
+        eprintln!(
+            "  {:<8} {:<16} {:<10} {} {}",
+            decl.name, decl.url, decl.access, decl.classification, decl.integrity,
+        );
     }
 }
 
@@ -659,6 +761,8 @@ access = "readwrite"
         assert_eq!(decls[0].name, "fs");
         assert_eq!(decls[0].url, "file:./");
         assert_eq!(decls[0].access, Access::ReadWrite);
+        assert_eq!(decls[0].classification, ClassificationLevel::Private);
+        assert_eq!(decls[0].integrity, IntegrityLevel::Me);
     }
 
     #[test]
@@ -712,9 +816,13 @@ access = "execute"
             name: "fs".to_string(),
             url: "file:./".to_string(),
             access: Access::ReadWrite,
+            classification: ClassificationLevel::Private,
+            integrity: IntegrityLevel::Me,
         }];
         let rs = generate_resources_rs(&decls);
-        assert!(rs.contains("pub fs: jevs::file::FileTree,"));
+        assert!(rs.contains(
+            "pub fs: jevs::file::FileTree<jevs::label::Private, jevs::label::Me>,"
+        ));
         assert!(rs.contains("fs: jevs::file::FileTree::open(key, \".\"),"));
     }
 
@@ -724,9 +832,13 @@ access = "execute"
             name: "config".to_string(),
             url: "file:./config.toml".to_string(),
             access: Access::Read,
+            classification: ClassificationLevel::Private,
+            integrity: IntegrityLevel::Me,
         }];
         let rs = generate_resources_rs(&decls);
-        assert!(rs.contains("pub config: jevs::file::File,"));
+        assert!(rs.contains(
+            "pub config: jevs::file::File<jevs::label::Private, jevs::label::Me>,"
+        ));
         assert!(rs.contains(
             "config: jevs::file::File::open(key, \"./config.toml\"),"
         ));
@@ -739,22 +851,44 @@ access = "execute"
                 name: "data".to_string(),
                 url: "file:/data/".to_string(),
                 access: Access::Read,
+                classification: ClassificationLevel::Private,
+                integrity: IntegrityLevel::Me,
             },
             ResourceDecl {
                 name: "out".to_string(),
                 url: "file:/tmp/result.txt".to_string(),
                 access: Access::Write,
+                classification: ClassificationLevel::Public,
+                integrity: IntegrityLevel::Me,
             },
         ];
         let rs = generate_resources_rs(&decls);
-        assert!(rs.contains("pub data: jevs::file::FileTree,"));
-        assert!(rs.contains("pub out: jevs::file::File,"));
+        assert!(rs.contains(
+            "pub data: jevs::file::FileTree<jevs::label::Private, jevs::label::Me>,"
+        ));
+        assert!(rs.contains(
+            "pub out: jevs::file::File<jevs::label::Public, jevs::label::Me>,"
+        ));
         assert!(rs.contains(
             "data: jevs::file::FileTree::open(key, \"/data\"),"
         ));
         assert!(rs.contains(
             "out: jevs::file::File::open(key, \"/tmp/result.txt\"),"
         ));
+    }
+
+    #[test]
+    fn parse_decls_explicit_labels() {
+        let toml = r#"
+[resources.web_data]
+url = "file:./downloads/"
+access = "read"
+confidentiality = "public"
+integrity = "world"
+"#;
+        let decls = parse_resource_decls(toml).unwrap();
+        assert_eq!(decls[0].classification, ClassificationLevel::Public);
+        assert_eq!(decls[0].integrity, IntegrityLevel::World);
     }
 
     #[test]

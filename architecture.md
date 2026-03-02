@@ -97,10 +97,10 @@ this is opinionated design work,
 not an afterthought.
 
 **Compiler-verified plans auto-approve.**
-If a compiled plan has no promotions
-or declassifications,
+If a compiled plan has no declassifications
+or accreditations,
 it is safe by construction and runs immediately.
-Promotions require human confirmation.
+Label crossings require human confirmation.
 The permission manifest is always available
 as an audit artifact but is not a blocking gate.
 
@@ -145,8 +145,8 @@ PHASE 4: COMPILE + VERIFY
     |      |
     |      +--[success]--> permission manifest
     |                          |
-    |            [no promotions]--> auto-approve
-    |            [promotions]----> human confirms
+    |            [no label crossings]--> auto-approve
+    |            [label crossings]----> human confirms
     |                               boundary crossings
     |                          |
     |                          v
@@ -200,8 +200,8 @@ become `resources.rs`.
 All task code compiles as `tasks.rs`
 without access to resource constructors.
 On successful compilation,
-plans with no promotions auto-approve;
-plans with promotions require human confirmation
+plans with no label crossings auto-approve;
+plans with label crossings require human confirmation
 of the specific boundary crossings.
 The container is configured
 from the declared resources.
@@ -302,8 +302,8 @@ information flow constraints.
 No additional user approval is needed
 unless the sub-plan requires a new resource grant
 (beyond what the parent already approved)
-or needs to promote data
-(declassify or endorse beyond automatic rules).
+or needs to cross label boundaries
+(declassify or accredit beyond automatic rules).
 
 **Deterministic work** needs no subagent.
 Data transforms, filtering, aggregation,
@@ -314,14 +314,15 @@ on straightforward transforms.
 
 ### Auto-approve
 
-A compiled plan with no `.promote()` calls
-and no confidentiality declassifications
+A compiled plan with no `.declassify()` calls
+and no `.accredit()` calls
 is safe by construction: the type system proved
 no untrusted data reaches action boundaries
 and no private data leaks to public outputs.
 These plans auto-approve and run immediately.
 
-Plans with promotions require human confirmation
+Plans with declassifications or accreditations
+require human confirmation
 of the specific boundary crossings.
 
 ### Components
@@ -355,7 +356,7 @@ Reusable local modules
 containing functions developed through jev usage.
 Uses jevs types and resource handles.
 When the planner generates a useful function,
-it can be promoted into jevu
+it can be curated into jevu
 for reuse across future plans.
 Grows organically from real usage:
 a personal library of proven patterns.
@@ -607,7 +608,7 @@ like Personal/Work in the future).
 Prevents low-integrity data
 (which may contain adversarial content)
 from influencing high-integrity actions.
-Lattice: `Self > Friend > World`
+Lattice: `Me > Friend > World`
 (extensible to additional tiers).
 
 These are orthogonal.
@@ -623,8 +624,8 @@ Principals are entities with security concerns.
 The system is generic over principals
 but ships with a fixed initial set:
 
-- **Self**: the user. Highest integrity.
-  Data endorsed by Self can do anything.
+- **Me**: the user. Highest integrity.
+  Data endorsed by Me can do anything.
 - **Friend**: a trusted contact tier.
   Configured per-contact in the contact book.
   Can influence medium-sensitivity actions
@@ -653,34 +654,31 @@ can be added by extending the principal set.
 The lattice ordering determines
 which tiers satisfy which requirements.
 
-#### `Labeled<T>` (name TBD)
+#### `Labeled<T, C, I>`
 
 All data produced by resources
-is wrapped in `Labeled<T, Conf, Integrity>`,
+is wrapped in `Labeled<T, C, I>`,
 a monadic type carrying both axes.
-(The current `Tainted<T>` / `Endorsed<T>`
-will be replaced by this unified wrapper.)
+Resources carry labels as type parameters
+(`File<C, I>`, `FileTree<C, I>`);
+data produced by a resource inherits its labels.
 
 Labeled propagates through all data operations:
 
 ```rust
-// Field access preserves labels
-let subject: Labeled<&str> = email.subject();
-
 // Map preserves labels
-let upper: Labeled<String> = subject.map(|s| {
-    s.to_uppercase()
-});
+let upper: Labeled<String, Private, Me> =
+    content.map(|s| s.to_uppercase());
 
 // Combining two values: lattice join.
 // Most restrictive confidentiality,
 // least trustworthy integrity.
 let combined: Labeled<String, Private, World> =
-    Labeled::join(
-        friend_email,   // Private, Friend
-        web_content,    // Public, World
-        |a, b| format!("{}: {}", a, b),
-    );
+    friend_email    // Private, Friend
+        .join(
+            web_content,  // Public, World
+            |a, b| format!("{}: {}", a, b),
+        );
 ```
 
 This means mixing private data with anything
@@ -689,9 +687,16 @@ and mixing low-integrity data with anything
 taints the result.
 Both conservative and correct.
 
-#### Declassification and promotion
+`Labeled::local(value)` creates data
+with maximum trust (Public, Me)
+for locally-constructed values
+not derived from resources.
 
-Two mechanisms for crossing label boundaries:
+#### Declassification and accreditation
+
+Two canonical operations for crossing label boundaries.
+The inverses (`classify` and `discredit`)
+are trivial and may not appear in practice.
 
 **Automatic declassification** via bounded-output types.
 When an operation maps labeled input
@@ -715,31 +720,34 @@ but the variant itself is a known-good value.
 Misclassification is a competence problem,
 not a security escalation.
 
-**Promotion** for open types.
-`.promote::<Target>()` explicitly raises data
-to a target level in either hierarchy.
-This triggers real human confirmation
-(not a no-op cast).
-Promotion can target any tier, not just the top:
+**`declassify`** for the confidentiality axis.
+Decreases classification: Private → Public.
+Releases private data for world-visible use.
+Requires human confirmation for non-Declassifiable types.
+
+**`accredit`** for the integrity axis.
+Increases integrity to a target tier.
+Endorses data as more trustworthy.
+Requires human confirmation for non-Declassifiable types.
 
 ```rust
-// Promote World data to Friend integrity
+// Declassify private data for public use
+let public_data = private_data
+    .declassify()  // human confirms
+    .await?;
+
+// Accredit World data to Friend integrity
 // after human review.
 // Can now influence calendar, not bank.
 let reviewed = raw_data
-    .promote::<Friend>()  // human confirms
+    .accredit::<Friend>()  // human confirms
     .await?;
 
-// Promote all the way to Self
-let self_endorsed = raw_data
-    .promote::<Self>()    // human confirms
+// Accredit all the way to Me
+let endorsed = raw_data
+    .accredit::<Me>()      // human confirms
     .await?;
 ```
-
-The dual operation on the confidentiality axis:
-declassifying Private data to Public
-(explicitly releasing it for world-visible use).
-This also requires human confirmation.
 
 #### Action boundaries
 
@@ -762,7 +770,7 @@ impl EmailOutbox {
     ) -> Result<()>
     where
         I: SatisfiesIntegrity<Friend>,
-        C: SatisfiesConf<Public>,
+        C: SatisfiesClassification<Public>,
     { ... }
 }
 ```
@@ -770,7 +778,7 @@ impl EmailOutbox {
 Passing `Labeled<Draft, Private, World>` fails both:
 `World` doesn't satisfy `Friend` integrity,
 `Private` doesn't satisfy `Public` confidentiality.
-Passing `Labeled<Draft, Public, Self>` succeeds.
+Passing `Labeled<Draft, Public, Me>` succeeds.
 
 ### Sandboxing
 
@@ -880,18 +888,18 @@ and any trust boundary crossings:
 
 ```
 Resources:
-  File    read   /data/**             priv self   (summarize)
-  File    write  /output/report       priv self   (root)
+  File    read   /data/**             priv me     (summarize)
+  File    write  /output/report       priv me     (root)
   Inbox   read   luis@x.com [alice]   priv friend (scan)
   Outbox  send   luis@x.com           pub  friend (notify)
 
-Promotions:
-  World -> Friend  inbox summary (scan)
-  Private -> Public  notification body (notify)
+Label crossings:
+  accredit   World -> Friend  inbox summary (scan)
+  declassify Private -> Public  notification body (notify)
 ```
 
-No promotions = auto-approved.
-Promotions present = user confirms those crossings.
+No label crossings = auto-approved.
+Label crossings present = user confirms each.
 
 ### Resource declarations
 
@@ -937,9 +945,8 @@ which the orchestrator needs for tree merging.
 
 **Labels in declarations.**
 Confidentiality and integrity
-will be declared per resource
-once the information flow model lands.
-The planner needs to know the concrete labels
+are declared per resource.
+The planner needs the concrete labels
 to generate code that compiles;
 a Friend-integrity inbox read
 returns `Labeled<Email, Private, Friend>`,
@@ -949,14 +956,14 @@ The orchestrator cannot resolve labels silently
 because the LLM must write code
 against the correct type signatures.
 
-Planned declaration format with labels:
+Declaration format with labels:
 
 ```toml
 [resources.data]
 url = "file:/data"
 access = "read"
 confidentiality = "private"
-integrity = "self"
+integrity = "me"
 
 [resources.inbox]
 url = "mailto:luis@x.com"
@@ -976,9 +983,8 @@ The `contact` field resolves to an integrity tier
 via the contact book.
 Explicit `confidentiality` and `integrity` fields
 override defaults when needed.
-Until the information flow model is implemented,
-these fields are not present
-and all resources use the base types.
+Defaults for file resources:
+`private` confidentiality, `me` integrity.
 
 **Stash** is not a resource;
 it's a task-local helper, no grant needed.
@@ -1056,26 +1062,30 @@ build on sandboxing.
 **Phase 3: Information flow model + resources**
 - Two-axis information flow model:
   confidentiality (Private/Public)
-  and integrity (Self/Friend/World)
-- `Labeled<T, Conf, Integ>` monadic wrapper
-  with lattice join semantics
-- Principal tiers: generic machinery,
-  fixed initial set (Self, Friend, World)
-- Contact book: maps contacts to tiers,
-  stores per-contact settings and roles
+  and integrity (Me/Friend/World) **(done)**
+- `Labeled<T, C, I>` monadic wrapper
+  with lattice join semantics **(done)**
 - `Declassifiable` trait
   for automatic declassification
-  of bounded-output types
-- `.promote::<Tier>()` with human confirmation
-  for open types
+  of bounded-output types **(done)**
+- `.declassify()` / `.accredit::<Tier>()`
+  for label boundary crossings **(done, stub gate)**
+- `SatisfiesClassification` / `SatisfiesIntegrity`
+  trait bounds on resource methods **(done)**
 - Confidentiality/integrity fields
-  in resource declarations
+  in resource declarations **(done)**
+- `File<C, I>` / `FileTree<C, I>`
+  with labeled read/write **(done)**
+- Human confirmation gate
+  for `declassify`/`accredit`
+- Principal tiers: generic machinery,
+  fixed initial set (Me, Friend, World)
+- Contact book: maps contacts to tiers,
+  stores per-contact settings and roles
 - Real-world resource types:
   web, email (inbox/outbox), calendar
-- `SatisfiesIntegrity` / `SatisfiesConf`
-  trait bounds on action resource methods
 - jevu: user utility library
-  (promote reusable functions from prior plans)
+  (curate reusable functions from prior plans)
 - Saved plans + rerunning
 
 **Phase 4: Sandbox + subagent model**
@@ -1100,4 +1110,4 @@ build on sandboxing.
 - Jev planner subagents
   (nested planning loop, compilation as
   integrity endorsement, approval only
-  for new grants or data promotion)
+  for new grants or label crossings)

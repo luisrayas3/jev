@@ -1,15 +1,26 @@
+use crate::label::{
+    Classification, Integrity, Labeled, SatisfiesClassification,
+    SatisfiesIntegrity,
+};
 use crate::runtime::RuntimeKey;
 use anyhow::{Context, Result};
+use std::marker::PhantomData;
 use std::path::PathBuf;
 
 pub const FILE_API_DOCS: &str = r#"## Single file - `jevs::file::File`
 
 ```rust
-// Read the file (shared ref, can parallelize reads)
-let content: String = res.config.read().await?;
+// Read returns labeled data
+let content = res.config.read().await?;
 
-// Write the file (exclusive ref, no concurrent access)
-res.config.write("new content").await?;
+// Transform with map (preserves labels)
+let upper = content.map(|s| s.to_uppercase());
+
+// Write labeled data (labels must be compatible)
+res.config.write(upper).await?;
+
+// Write fresh local data
+res.config.write(jevs::label::Labeled::local("new".to_string())).await?;
 ```
 
 Key: `&File` = read, `&mut File` = write.
@@ -22,14 +33,17 @@ It is provided via `res.<name>`.
 pub const TREE_API_DOCS: &str = r#"## Directory tree - `jevs::file::FileTree`
 
 ```rust
-// Read a file (shared ref, can parallelize reads)
-let content: String = res.fs.read("file.txt").await?;
+// Read returns labeled data
+let content = res.fs.read("file.txt").await?;
 
-// Glob for files (shared ref)
+// Glob for files (returns paths, not labeled)
 let files: Vec<String> = res.fs.glob("*.rs").await?;
 
-// Write a file (exclusive ref, no concurrent access)
-res.fs.write("out.txt", "content").await?;
+// Write labeled data
+res.fs.write("out.txt", content).await?;
+
+// Write fresh local data
+res.fs.write("out.txt", jevs::label::Labeled::local("hi".to_string())).await?;
 ```
 
 Key: `&FileTree` = read, `&mut FileTree` = write.
@@ -43,36 +57,55 @@ It is provided via `res.<name>`.
 
 /// Single-file resource bound to one path.
 ///
-/// Safety semantics via Rust's borrow system:
-/// - `&File`     → read access (shared, parallelizable)
-/// - `&mut File` → write access (exclusive)
-pub struct File {
+/// Type parameters carry classification and integrity labels.
+/// - `&File`     → read access (shared), returns `Labeled<String, C, I>`
+/// - `&mut File` → write access (exclusive), takes labeled data
+pub struct File<C: Classification, I: Integrity> {
     path: PathBuf,
-    _private: (),
+    _c: PhantomData<C>,
+    _i: PhantomData<I>,
 }
 
-impl File {
+impl<C: Classification, I: Integrity> File<C, I> {
     /// Open a single-file resource at `path`.
     /// Requires a `&RuntimeKey`; only `main` holds one.
     pub fn open(_key: &RuntimeKey, path: &str) -> Self {
         let path = std::fs::canonicalize(path)
             .unwrap_or_else(|_| PathBuf::from(path));
-        File { path, _private: () }
+        File {
+            path,
+            _c: PhantomData,
+            _i: PhantomData,
+        }
     }
 
-    /// Read the file's contents. Takes `&self`, shared read access.
-    pub async fn read(&self) -> Result<String> {
-        tokio::fs::read_to_string(&self.path)
+    /// Read the file's contents.
+    /// Takes `&self`, shared read access.
+    /// Returns data carrying the resource's labels.
+    pub async fn read(&self) -> Result<Labeled<String, C, I>> {
+        let content = tokio::fs::read_to_string(&self.path)
             .await
-            .with_context(|| format!("reading {}", self.path.display()))
+            .with_context(|| format!("reading {}", self.path.display()))?;
+        Ok(Labeled::new(content))
     }
 
-    /// Write content to the file. Takes `&mut self`, exclusive write access.
-    pub async fn write(&mut self, content: &str) -> Result<()> {
+    /// Write labeled data to the file.
+    /// Takes `&mut self`, exclusive write access.
+    /// Data labels must be compatible with the resource:
+    /// classification at most as restrictive,
+    /// integrity at least as high.
+    pub async fn write<Ci: Classification, Ii: Integrity>(
+        &mut self,
+        content: Labeled<String, Ci, Ii>,
+    ) -> Result<()>
+    where
+        Ci: SatisfiesClassification<C>,
+        Ii: SatisfiesIntegrity<I>,
+    {
         if let Some(parent) = self.path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        tokio::fs::write(&self.path, content)
+        tokio::fs::write(&self.path, content.into_inner())
             .await
             .with_context(|| format!("writing {}", self.path.display()))
     }
@@ -80,47 +113,67 @@ impl File {
 
 /// Directory tree resource rooted at a directory.
 ///
-/// Safety semantics via Rust's borrow system:
-/// - `&FileTree`     → read access (shared, parallelizable)
-/// - `&mut FileTree` → write access (exclusive)
-pub struct FileTree {
+/// Type parameters carry classification and integrity labels.
+/// - `&FileTree`     → read access (shared), returns `Labeled<String, C, I>`
+/// - `&mut FileTree` → write access (exclusive), takes labeled data
+pub struct FileTree<C: Classification, I: Integrity> {
     root: PathBuf,
-    _private: (),
+    _c: PhantomData<C>,
+    _i: PhantomData<I>,
 }
 
-impl FileTree {
+impl<C: Classification, I: Integrity> FileTree<C, I> {
     /// Open a directory tree resource rooted at `root`.
     /// Requires a `&RuntimeKey`; only `main` holds one.
     pub fn open(_key: &RuntimeKey, root: &str) -> Self {
         let root = std::fs::canonicalize(root)
             .unwrap_or_else(|_| PathBuf::from(root));
-        FileTree { root, _private: () }
+        FileTree {
+            root,
+            _c: PhantomData,
+            _i: PhantomData,
+        }
     }
 
     fn resolve(&self, path: &str) -> PathBuf {
         self.root.join(path)
     }
 
-    /// Read a file's contents. Takes `&self`, shared read access.
-    pub async fn read(&self, path: &str) -> Result<String> {
+    /// Read a file's contents.
+    /// Takes `&self`, shared read access.
+    /// Returns data carrying the resource's labels.
+    pub async fn read(&self, path: &str) -> Result<Labeled<String, C, I>> {
         let full = self.resolve(path);
-        tokio::fs::read_to_string(&full)
+        let content = tokio::fs::read_to_string(&full)
             .await
-            .with_context(|| format!("reading {}", full.display()))
+            .with_context(|| format!("reading {}", full.display()))?;
+        Ok(Labeled::new(content))
     }
 
-    /// Write content to a file. Takes `&mut self`, exclusive write access.
-    pub async fn write(&mut self, path: &str, content: &str) -> Result<()> {
+    /// Write labeled data to a file.
+    /// Takes `&mut self`, exclusive write access.
+    /// Data labels must be compatible with the resource.
+    pub async fn write<Ci: Classification, Ii: Integrity>(
+        &mut self,
+        path: &str,
+        content: Labeled<String, Ci, Ii>,
+    ) -> Result<()>
+    where
+        Ci: SatisfiesClassification<C>,
+        Ii: SatisfiesIntegrity<I>,
+    {
         let full = self.resolve(path);
         if let Some(parent) = full.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        tokio::fs::write(&full, content)
+        tokio::fs::write(&full, content.into_inner())
             .await
             .with_context(|| format!("writing {}", full.display()))
     }
 
-    /// Glob for files matching a pattern. Takes `&self`, shared read access.
+    /// Glob for files matching a pattern.
+    /// Takes `&self`, shared read access.
+    /// Returns paths (unlabeled structural metadata).
     pub async fn glob(&self, pattern: &str) -> Result<Vec<String>> {
         let full_pattern = self.root.join(pattern);
         let pattern_str = full_pattern
@@ -148,6 +201,7 @@ impl FileTree {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::label::{Private, Public, Me};
 
     use std::sync::OnceLock;
 
@@ -161,19 +215,32 @@ mod tests {
     #[tokio::test]
     async fn tree_read_and_write() {
         let dir = tempfile::tempdir().unwrap();
-        let mut f = FileTree::open(&test_key(), dir.path().to_str().unwrap());
-        f.write("hello.txt", "hello world").await.unwrap();
+        let mut f: FileTree<Private, Me> =
+            FileTree::open(test_key(), dir.path().to_str().unwrap());
+        f.write(
+            "hello.txt",
+            Labeled::local("hello world".to_string()),
+        )
+        .await
+        .unwrap();
         let content = f.read("hello.txt").await.unwrap();
-        assert_eq!(content, "hello world");
+        assert_eq!(content.into_inner(), "hello world");
     }
 
     #[tokio::test]
     async fn tree_glob_matches() {
         let dir = tempfile::tempdir().unwrap();
-        let mut f = FileTree::open(&test_key(), dir.path().to_str().unwrap());
-        f.write("a.txt", "a").await.unwrap();
-        f.write("b.txt", "b").await.unwrap();
-        f.write("c.md", "c").await.unwrap();
+        let mut f: FileTree<Private, Me> =
+            FileTree::open(test_key(), dir.path().to_str().unwrap());
+        f.write("a.txt", Labeled::local("a".to_string()))
+            .await
+            .unwrap();
+        f.write("b.txt", Labeled::local("b".to_string()))
+            .await
+            .unwrap();
+        f.write("c.md", Labeled::local("c".to_string()))
+            .await
+            .unwrap();
         let mut matches = f.glob("*.txt").await.unwrap();
         matches.sort();
         assert_eq!(matches, vec!["a.txt", "b.txt"]);
@@ -182,7 +249,8 @@ mod tests {
     #[tokio::test]
     async fn tree_read_missing_file() {
         let dir = tempfile::tempdir().unwrap();
-        let f = FileTree::open(&test_key(), dir.path().to_str().unwrap());
+        let f: FileTree<Private, Me> =
+            FileTree::open(test_key(), dir.path().to_str().unwrap());
         assert!(f.read("nope.txt").await.is_err());
     }
 
@@ -192,17 +260,21 @@ mod tests {
     async fn file_read_and_write() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.txt");
-        let mut f = File::open(&test_key(), path.to_str().unwrap());
-        f.write("hello file").await.unwrap();
+        let mut f: File<Private, Me> =
+            File::open(test_key(), path.to_str().unwrap());
+        f.write(Labeled::local("hello file".to_string()))
+            .await
+            .unwrap();
         let content = f.read().await.unwrap();
-        assert_eq!(content, "hello file");
+        assert_eq!(content.into_inner(), "hello file");
     }
 
     #[tokio::test]
     async fn file_read_missing() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nope.txt");
-        let f = File::open(&test_key(), path.to_str().unwrap());
+        let f: File<Private, Me> =
+            File::open(test_key(), path.to_str().unwrap());
         assert!(f.read().await.is_err());
     }
 
@@ -210,9 +282,25 @@ mod tests {
     async fn file_write_creates_parents() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sub/dir/test.txt");
-        let mut f = File::open(&test_key(), path.to_str().unwrap());
-        f.write("nested").await.unwrap();
+        let mut f: File<Private, Me> =
+            File::open(test_key(), path.to_str().unwrap());
+        f.write(Labeled::local("nested".to_string()))
+            .await
+            .unwrap();
         let content = f.read().await.unwrap();
-        assert_eq!(content, "nested");
+        assert_eq!(content.into_inner(), "nested");
+    }
+
+    #[tokio::test]
+    async fn file_write_public_to_private() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.txt");
+        let mut f: File<Private, Me> =
+            File::open(test_key(), path.to_str().unwrap());
+        let data: Labeled<String, Public, Me> =
+            Labeled::local("public data".to_string());
+        f.write(data).await.unwrap();
+        let content = f.read().await.unwrap();
+        assert_eq!(content.into_inner(), "public data");
     }
 }

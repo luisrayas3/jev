@@ -232,54 +232,54 @@ with decisions and changes from this session
 
 ## Current status
 
-**Phase**: 2 complete
+**Phase**: 3 in progress
 (see architecture.md for phased roadmap)
 
 **What's implemented**:
 - `jevs` library: `file`, `stash`, `text`, `label`,
   `runtime` modules with per-module API docs
-- `jevs::file::File` (single file) and
-  `jevs::file::FileTree` (directory tree);
+- `jevs::label::Labeled<T, C, I>`:
+  two-axis IFC wrapper carrying confidentiality
+  (Private/Public) and integrity (Me/Friend/World);
+  `map`, `join` (lattice join), `inner`, `into_inner`,
+  `declassify` (Private→Public, async),
+  `accredit::<Target>` (increase integrity, async),
+  `Labeled::local(value)` (Public, Me)
+- `Declassifiable` trait for bounded-output types
+- `SatisfiesClassification` / `SatisfiesIntegrity` trait bounds
+- `jevs::file::File<C, I>` and
+  `jevs::file::FileTree<C, I>`:
+  resources carry labels as type parameters;
+  `read()` returns `Labeled<String, C, I>`;
+  `write()` requires compatible labels
+  via `SatisfiesClassification` + `SatisfiesIntegrity` bounds;
   trailing `/` in URL distinguishes them
 - `jevs::api::catalog()` aggregates module docs
 - `jev` CLI with `plan`, `run`, and `go` subcommands
 - LLM integration via Anthropic API
 - LLM outputs two fenced blocks:
   ```rust``` (tasks.rs) + ```toml``` (resource decls)
-- Resource declarations: TOML with URL + access,
+- Resource declarations: TOML with URL + access +
+  optional confidentiality/integrity labels
+  (defaults: private/me);
   auto-generates `resources.rs`
-  (struct + `create(&key)`)
+  (struct with label type params + `create(&key)`)
 - URL-based resource identification
   (`file:./` = directory, `file:./foo` = file)
-- RuntimeKey barrier: `RuntimeKey::init(random)`
-  called once by plan main.rs;
-  `File::open` / `FileTree::open` require the key;
-  tasks never receive it
-- Permission manifest derived from declarations
-  (name, URL, access)
+- RuntimeKey barrier
+- Permission manifest with labels
 - Plan structure: `main.rs` (embedded asset) +
   `resources.rs` (auto-generated from decls) +
   `tasks.rs` (LLM)
-- Cargo.toml template asset
-  (`jev/assets/Cargo.tmpl.toml`)
-- Qualified imports (`jevs::file::File`,
-  `jevs::file::FileTree`, not `use jevs::*`)
 - Compile error feedback loop
   (retry with error context, up to 4 attempts)
-- Unit tests (30) + e2e test (fish, full pipeline)
+- Unit tests (36) + e2e test (fish, full pipeline)
 
 **What's NOT implemented yet**:
-- Two-axis information flow model:
-  confidentiality (Private/Public) +
-  integrity (Self/Friend/World)
-- `Labeled<T>` monadic wrapper (replaces
-  current `Tainted<T>` / `Endorsed<T>`)
+- Human confirmation gate for `declassify`/`accredit`
+  (currently async stubs returning Ok)
 - Principal tiers with contact book
   (contacts map to integrity tiers)
-- `Declassifiable` trait
-  (automatic declassification for bounded types)
-- `.promote()` with human confirmation
-  (generalized `.verify()`, targets any tier)
 - Sandbox as capability type
   (mounts, derived labels, shell access,
   taint-capability check at construction)
@@ -295,4 +295,4 @@ with decisions and changes from this session
 - jevu user utility library
   (reusable functions from prior plans)
 - Auto-approve for label-safe plans
-  (no promotions or declassifications)
+  (no declassifications or accreditations)

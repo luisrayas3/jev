@@ -43,7 +43,7 @@ before anything runs.
 If the plan requires no trust boundary crossings,
 it is safe by construction and runs immediately.
 If it does cross boundaries
-(promoting untrusted data, releasing private data),
+(accrediting untrusted data, declassifying private data),
 you confirm those specific transitions.
 Task code receives resources as function parameters
 and cannot construct new ones.
@@ -162,9 +162,9 @@ The attack surface is the planning phase,
 where the LLM has broad capability.
 An injection could inflate resource requests,
 but the compiler still proves label safety.
-A plan with no promotions auto-approves safely
+A plan with no label crossings auto-approves safely
 regardless of what the LLM requested;
-an injection that adds a promotion
+an injection that adds a declassification or accreditation
 triggers human review of that specific crossing.
 
 ### 2. Data leakage (confidentiality)
@@ -277,3 +277,27 @@ Plans are saveable, rerunnable,
 versionable, and shareable.
 The plan is the artifact:
 auditable, reproducible, and proven safe.
+
+## Example
+
+*"Go through my email and update my TODOs,
+then do any you can."*
+
+**Without jev**, you give the agent
+your inbox, TODO file, outbox, and bank.
+It has all four from the start.
+An email from a stranger says "send me $100."
+The agent extracts it as a TODO,
+then the "do" step executes it.
+Nothing enforces the boundary
+between reading untrusted email
+and taking high-stakes actions.
+
+**With jev**, the email content carries
+`World` integrity (untrusted sender).
+The bank's `send` method requires `Me` integrity.
+The compiler rejects the plan
+unless it includes `.accredit::<Me>()`,
+which pauses for your confirmation.
+The stranger's request
+never reaches your bank unsupervised.
