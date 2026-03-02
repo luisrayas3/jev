@@ -96,16 +96,13 @@ while maintaining safety;
 this is opinionated design work,
 not an afterthought.
 
-**The permission manifest is the user contract.**
-The user approves a flat list of resource grants,
-not source code.
-The compiler proved the code can't exceed
-those grants.
-The container enforces it at runtime.
-This is a third option between
-per-action runtime prompts
-(which train users to click "yes")
-and blanket access (which is unsafe).
+**Compiler-verified plans auto-approve.**
+If a compiled plan has no promotions
+or declassifications,
+it is safe by construction and runs immediately.
+Promotions require human confirmation.
+The permission manifest is always available
+as an audit artifact but is not a blocking gate.
 
 ## System architecture
 
@@ -137,7 +134,7 @@ PHASE 3: RESOLVE UP (mostly mechanical)
     |  Root collects all external resource declarations
     |
     v
-PHASE 4: COMPILE + APPROVE
+PHASE 4: COMPILE + VERIFY
     |
     |  resources.rs: root resource declarations
     |  tasks.rs: all task code (no constructor access)
@@ -148,17 +145,18 @@ PHASE 4: COMPILE + APPROVE
     |      |
     |      +--[success]--> permission manifest
     |                          |
-    |                          v
-    |                      user approves grants
+    |            [no promotions]--> auto-approve
+    |            [promotions]----> human confirms
+    |                               boundary crossings
     |                          |
     |                          v
     |                      container configured
-    |                      from approved grants
+    |                      from declared resources
     |
     v
 EXECUTION (compiled plan in container)
     |
-    |  Only approved resources mounted
+    |  Only declared resources mounted
     |  Native code: transforms, I/O, orchestration
     |  Subagent calls: typed, resource-scoped
     |  Results
@@ -196,16 +194,17 @@ to sequence conflicting access modes
 or parallelize compatible ones.
 This phase is largely mechanical.
 
-**Phase 4: Compile and approve.**
+**Phase 4: Compile and verify.**
 The root's resource declarations
 become `resources.rs`.
 All task code compiles as `tasks.rs`
 without access to resource constructors.
 On successful compilation,
-the permission manifest is derived
-from `resources.rs` and presented to the user.
-The user approves the grants.
-The container is configured to match.
+plans with no promotions auto-approve;
+plans with promotions require human confirmation
+of the specific boundary crossings.
+The container is configured
+from the declared resources.
 
 Compile errors at any point
 feed back to the relevant planner
@@ -313,26 +312,17 @@ These compile to native code and run fast.
 Other orchestrators often waste LLM calls
 on straightforward transforms.
 
-### "Do it" mode
+### Auto-approve
 
-The plan-compile-approve flow is thorough
-but adds latency for simple tasks.
-"Do it" mode is an opt-in fast path
-for cases where the full flow is overkill.
+A compiled plan with no `.promote()` calls
+and no confidentiality declassifications
+is safe by construction: the type system proved
+no untrusted data reaches action boundaries
+and no private data leaks to public outputs.
+These plans auto-approve and run immediately.
 
-The user explicitly triggers "do it" mode;
-it is never automatic, always a conscious choice.
-
-- Smaller model specialized for one-liner plans
-- All available resources granted upfront
-- Every resource access is audited (logged)
-- No compilation step, no permission approval
-- Results are immediate
-
-This trades compile-time safety guarantees
-for speed and convenience on simple tasks.
-The audit log provides after-the-fact visibility.
-The user decides when the trade-off is appropriate.
+Plans with promotions require human confirmation
+of the specific boundary crossings.
 
 ### Components
 
@@ -885,27 +875,23 @@ All output carries the sandbox's labels.
 
 ### Permission manifest
 
-The manifest is derived
-from parsed resource declarations
-and is the user-facing audit surface:
+The manifest lists declared resources
+and any trust boundary crossings:
 
 ```
-This plan requires:
-  File      read   /data/**             priv self   (summarize, format)
-  File      write  /output/report       priv self   (root)
-  Web       fetch  news.ycombinator.com pub  world  (scrape)
-  Inbox     read   luis@x.com [alice]   priv friend (scan-inbox)
-  Outbox    send   luis@x.com           pub  friend (notify)
+Resources:
+  File    read   /data/**             priv self   (summarize)
+  File    write  /output/report       priv self   (root)
+  Inbox   read   luis@x.com [alice]   priv friend (scan)
+  Outbox  send   luis@x.com           pub  friend (notify)
+
+Promotions:
+  World -> Friend  inbox summary (scan)
+  Private -> Public  notification body (notify)
 ```
 
-Each entry lists the access mode,
-the resource path,
-and which tasks use it.
-Conditional accesses (behind `if` branches)
-can be annotated.
-
-The user approves this list,
-not source code.
+No promotions = auto-approved.
+Promotions present = user confirms those crossings.
 
 ### Resource declarations
 
@@ -1115,6 +1101,3 @@ build on sandboxing.
   (nested planning loop, compilation as
   integrity endorsement, approval only
   for new grants or data promotion)
-- "Do it" mode
-  (opt-in fast path, audit-logged,
-  no compilation)

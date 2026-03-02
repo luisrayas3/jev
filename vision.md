@@ -29,12 +29,9 @@ When you describe a task,
 jev decomposes it into a tree of subtasks,
 each declaring what resources it needs.
 All resource requirements bubble up
-to a single permission manifest:
+to a permission manifest:
 a flat, readable list of grants
 (read `/data`, write `/output`, etc.).
-You approve the permissions,
-and the compiler guarantees
-the plan can't exceed them.
 
 Resource types encode two security properties
 from information flow control:
@@ -43,10 +40,15 @@ and *integrity*
 (untrusted content cannot influence actions).
 The compiler enforces both
 before anything runs.
+If the plan requires no trust boundary crossings,
+it is safe by construction and runs immediately.
+If it does cross boundaries
+(promoting untrusted data, releasing private data),
+you confirm those specific transitions.
 Task code receives resources as function parameters
 and cannot construct new ones.
 The plan runs in a sandbox
-where only approved resources are mounted,
+where only declared resources are mounted,
 providing a second enforcement layer at runtime.
 
 Deterministic work (filtering, transforming,
@@ -158,11 +160,12 @@ because the compiled plan provably separates them.
 
 The attack surface is the planning phase,
 where the LLM has broad capability.
-The defense there is the permission manifest:
-the user reviews a flat list of grants
-before anything executes.
-An injection that inflates permissions
-is visible in the manifest.
+An injection could inflate resource requests,
+but the compiler still proves label safety.
+A plan with no promotions auto-approves safely
+regardless of what the LLM requested;
+an injection that adds a promotion
+triggers human review of that specific crossing.
 
 ### 2. Data leakage (confidentiality)
 
@@ -258,15 +261,17 @@ not a primary defense.
 
 Describe a task in natural language.
 The system decomposes it, plans each piece,
-and presents a permission manifest:
-what resources the plan will access,
-with what access mode, and why.
-You approve the permissions and it executes.
+and compiles.
+If the plan crosses no trust boundaries,
+it runs immediately.
+If it does, you confirm
+the specific boundary crossings, and it runs.
 
 You don't need to read generated code.
-The compiler proved the code can't exceed
-the permissions you approved.
-The container enforces it at runtime.
+The compiler proved the information flow is safe.
+The container enforces resource access at runtime.
+A permission manifest is always available
+as an audit artifact.
 
 Plans are saveable, rerunnable,
 versionable, and shareable.

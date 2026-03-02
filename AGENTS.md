@@ -294,4 +294,5 @@ with decisions and changes from this session
 - Containerized execution
 - jevu user utility library
   (reusable functions from prior plans)
-- "Do it" mode (opt-in fast path)
+- Auto-approve for label-safe plans
+  (no promotions or declassifications)
