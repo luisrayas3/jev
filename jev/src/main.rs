@@ -71,10 +71,12 @@ const RESOURCES_DOCS: &str = r#"## Resources struct
 Your code receives a `&mut Resources` with these fields:
 ```rust
 pub struct Resources {
-    pub fs: jevs::file::File,  // filesystem rooted at "."
+    pub fs: jevs::file::File,    // filesystem rooted at "."
+    pub stash: jevs::stash::Stash, // content-addressed blob storage
 }
 ```
-Access resources through `res.fs`, not by constructing them.
+Access resources through `res.fs` and `res.stash`,
+not by constructing them.
 "#;
 
 const SYSTEM_PROMPT: &str = r#"You are a Rust code generator for the jev agent system.
@@ -87,7 +89,8 @@ Rules:
 - Do NOT use `use jevs::*;` - use qualified paths like `jevs::file::File`, `jevs::text::line_count`, `jevs::trust::Unverified`.
 - Implement `pub async fn root(res: &mut Resources) -> anyhow::Result<()>`
 - Access the filesystem through `res.fs` (it's a `jevs::file::File`).
-- Do NOT construct File, use RuntimeKey, or reference jevsr. Resources are pre-constructed.
+- Access the stash through `res.stash` (it's a `jevs::stash::Stash`).
+- Do NOT construct File, Stash, use RuntimeKey, or reference jevsr. Resources are pre-constructed.
 - `res.fs.read()` and `res.fs.glob()` take `&self` (shared read access).
 - `res.fs.write()` takes `&mut self` (exclusive write access).
 - Use `tokio::join!` for parallel reads.
@@ -174,7 +177,7 @@ async fn call_llm_raw(
 
 /// Check that tasks.rs doesn't reference jevsr, RuntimeKey, or File::open.
 fn check_boundary(code: &str) -> Result<()> {
-    let violations: Vec<&str> = ["jevsr", "RuntimeKey", "File::open"]
+    let violations: Vec<&str> = ["jevsr", "RuntimeKey", "File::open", "Stash::new"]
         .into_iter()
         .filter(|term| code.contains(term))
         .collect();
@@ -341,12 +344,14 @@ anyhow = "1"
     // Generate resources.rs
     let resources_code = r#"pub struct Resources {
     pub fs: jevs::file::File,
+    pub stash: jevs::stash::Stash,
 }
 
-pub fn create() -> Resources {
-    Resources {
+pub fn create() -> anyhow::Result<Resources> {
+    Ok(Resources {
         fs: jevsr::open_file("."),
-    }
+        stash: jevs::stash::Stash::new()?,
+    })
 }
 "#;
     std::fs::write(src_dir.join("resources.rs"), resources_code)?;
