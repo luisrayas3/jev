@@ -19,7 +19,8 @@ jev/                    -- CLI binary
 ├── src/
 │   └── main.rs         -- plan / run / go commands
 ├── assets/
-│   └── plan_main.rs    -- fixed shim written into plans
+│   ├── main.tmpl.rs    -- fixed shim written into plans
+│   └── Cargo.tmpl.toml -- plan Cargo.toml template
 plans/                  -- generated programs land here
 tests/
 ├── e2e.fish            -- full pipeline test (fish)

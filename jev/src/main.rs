@@ -1,6 +1,8 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 /// jev - agent orchestration via Rust code generation
@@ -30,6 +32,151 @@ enum Command {
     },
 }
 
+// -- Resource declarations --------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq)]
+enum Access {
+    Read,
+    Write,
+    ReadWrite,
+}
+
+impl fmt::Display for Access {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Access::Read => write!(f, "read"),
+            Access::Write => write!(f, "write"),
+            Access::ReadWrite => write!(f, "readwrite"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ResourceDecl {
+    name: String,
+    url: String,
+    access: Access,
+}
+
+#[derive(Deserialize)]
+struct ResourceToml {
+    resources: HashMap<String, ResourceEntry>,
+}
+
+#[derive(Deserialize)]
+struct ResourceEntry {
+    url: String,
+    access: String,
+}
+
+fn parse_access(s: &str) -> Result<Access> {
+    match s {
+        "read" => Ok(Access::Read),
+        "write" => Ok(Access::Write),
+        "readwrite" => Ok(Access::ReadWrite),
+        other => bail!("unknown access mode \"{other}\"; expected read, write, or readwrite"),
+    }
+}
+
+/// Parse a resource URL into (scheme, path, is_dir).
+/// Trailing `/` distinguishes directories from files:
+/// `file:/tmp/foo` = single file, `file:./` = directory.
+fn parse_url(url: &str) -> Result<(&str, &str, bool)> {
+    let (scheme, rest) = url
+        .split_once(':')
+        .context("resource URL must contain ':' (e.g. file:./)")?;
+    match scheme {
+        "file" => {
+            let is_dir = rest.ends_with('/');
+            Ok((scheme, rest, is_dir))
+        }
+        other => bail!(
+            "unsupported URL scheme \"{other}:\"; only file: is supported for now"
+        ),
+    }
+}
+
+fn parse_resource_decls(toml_str: &str) -> Result<Vec<ResourceDecl>> {
+    let parsed: ResourceToml =
+        toml::from_str(toml_str).context("parsing resource declarations")?;
+    let mut decls: Vec<ResourceDecl> = parsed
+        .resources
+        .into_iter()
+        .map(|(name, entry)| {
+            let (_, _, _) = parse_url(&entry.url)?;
+            let access = parse_access(&entry.access)?;
+            Ok(ResourceDecl {
+                name,
+                url: entry.url,
+                access,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    decls.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(decls)
+}
+
+fn generate_resources_rs(decls: &[ResourceDecl]) -> String {
+    let mut fields = String::new();
+    let mut inits = String::new();
+    for decl in decls {
+        let (_, path, is_dir) = parse_url(&decl.url).expect("already validated");
+        if is_dir {
+            let path = path.trim_end_matches('/');
+            fields.push_str(&format!(
+                "    pub {}: jevs::file::FileTree,\n",
+                decl.name,
+            ));
+            inits.push_str(&format!(
+                "        {}: jevs::file::FileTree::open(key, \"{path}\"),\n",
+                decl.name,
+            ));
+        } else {
+            fields.push_str(&format!(
+                "    pub {}: jevs::file::File,\n",
+                decl.name,
+            ));
+            inits.push_str(&format!(
+                "        {}: jevs::file::File::open(key, \"{path}\"),\n",
+                decl.name,
+            ));
+        }
+    }
+    format!(
+        "pub struct Resources {{\n\
+         {fields}\
+         }}\n\
+         \n\
+         pub fn create(key: &jevs::runtime::RuntimeKey) -> Resources {{\n\
+         \x20   Resources {{\n\
+         {inits}\
+         \x20   }}\n\
+         }}\n"
+    )
+}
+
+// -- Response parsing -------------------------------------------------------
+
+/// Extract ```rust``` and ```toml``` fenced blocks from LLM response.
+fn parse_response(raw: &str) -> Result<(String, String)> {
+    let rust = extract_fenced(raw, "rust")
+        .context("response missing ```rust``` fenced block")?;
+    let toml = extract_fenced(raw, "toml")
+        .context("response missing ```toml``` fenced block")?;
+    Ok((rust, toml))
+}
+
+fn extract_fenced(text: &str, lang: &str) -> Option<String> {
+    let opener = format!("```{lang}");
+    let start = text.find(&opener)?;
+    let after_opener = start + opener.len();
+    let rest = &text[after_opener..];
+    let end = rest.find("```")?;
+    Some(rest[..end].trim().to_string())
+}
+
+// -- Paths and IDs ----------------------------------------------------------
+
 fn workspace_root() -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest.parent().unwrap().to_path_buf()
@@ -43,12 +190,13 @@ fn logs_dir() -> PathBuf {
     workspace_root().join("logs")
 }
 
-fn plan_id(task: &str, catalog: &str) -> String {
+fn plan_id(task: &str, catalog: &str, resource_toml: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     task.hash(&mut h);
     SYSTEM_PROMPT.hash(&mut h);
     catalog.hash(&mut h);
+    resource_toml.hash(&mut h);
     format!("{:x}", h.finish())
 }
 
@@ -66,39 +214,74 @@ fn latest_plan() -> Result<String> {
         .context("no plans found")
 }
 
-const RESOURCES_DOCS: &str = r#"## Resources struct
+// -- LLM prompts ------------------------------------------------------------
 
-Your code receives a `&mut Resources` with these fields:
-```rust
-pub struct Resources {
-    pub fs: jevs::file::File,    // filesystem rooted at "."
-}
+const RESOURCES_DOCS: &str = r#"## Resource declarations
+
+After the ```rust``` block, output a ```toml``` block declaring the resources your code needs.
+
+Format:
+```toml
+[resources.<name>]
+url = "<scheme>:<path>"
+access = "read" | "write" | "readwrite"
 ```
-Access the filesystem through `res.fs`.
-Do not construct resources yourself.
 
-For temporary storage, create a stash directly:
+- `<name>` becomes a field on the Resources struct: `res.<name>` in your code.
+- URL scheme determines the resource kind. Only `file:` is supported for now.
+- `access` controls permissions: `read`, `write`, or `readwrite`.
+
+**Trailing `/` convention:**
+- `file:/tmp/foo` = single file → `jevs::file::File` (no path arg: `res.f.read()`, `res.f.write(content)`)
+- `file:./` or `file:/data/` = directory → `jevs::file::FileTree` (path arg: `res.fs.read("file.txt")`, `res.fs.write("file.txt", content)`)
+
+Example (directory tree + single file):
+```toml
+[resources.fs]
+url = "file:./"
+access = "readwrite"
+
+[resources.config]
+url = "file:./config.toml"
+access = "read"
+```
+
+For temporary storage, create a stash directly (no declaration needed):
 `let stash = jevs::stash::Stash::new()?;`
 "#;
 
 const SYSTEM_PROMPT: &str = r#"You are a Rust code generator for the jev agent system.
 
-Wrap your output in a ```rust``` fenced code block.
-Output ONLY the fenced code block: no explanation, no commentary.
+Output TWO fenced blocks, in this order:
+1. ```rust``` — tasks.rs code
+2. ```toml``` — resource declarations
 
-Rules:
+Output ONLY these two blocks: no explanation, no commentary.
+
+Rules for the ```rust``` block:
 - Start with `use crate::resources::Resources;` and any needed qualified imports (e.g. `use jevs::text::line_count;`).
-- Do NOT use `use jevs::*;` - use qualified paths like `jevs::file::File`, `jevs::text::line_count`, `jevs::trust::Unverified`.
+- Do NOT use `use jevs::*;` - use qualified paths like `jevs::file::File`, `jevs::file::FileTree`, `jevs::text::line_count`, `jevs::trust::Unverified`.
 - Implement `pub async fn root(res: &mut Resources) -> anyhow::Result<()>`
-- Access the filesystem through `res.fs` (it's a `jevs::file::File`).
+- Access resources through fields on `res` (e.g. `res.fs`). The field names match the resource names you declare in TOML.
 - For temporary storage, create a stash: `let stash = jevs::stash::Stash::new()?;`
 - Do NOT construct resources. They are provided via the Resources struct.
-- `res.fs.read()` and `res.fs.glob()` take `&self` (shared read access).
-- `res.fs.write()` takes `&mut self` (exclusive write access).
+- **File** (single file, no trailing `/` in URL): `res.<name>.read()` and `res.<name>.write(content)` — no path parameter.
+- **FileTree** (directory, trailing `/` in URL): `res.<name>.read(path)`, `res.<name>.write(path, content)`, `res.<name>.glob(pattern)` — path parameter required.
+- `read()` and `glob()` take `&self` (shared read access).
+- `write()` takes `&mut self` (exclusive write access).
 - Use `tokio::join!` for parallel reads.
 - Never combine `&` and `&mut` access in the same join; it won't compile.
 - Print results to stdout so the user can see them.
+
+Rules for the ```toml``` block:
+- Declare each resource under `[resources.<name>]` with `url` and `access`.
+- `<name>` must match the field name you use as `res.<name>` in code.
+- Only `file:` URL scheme is supported.
+- Trailing `/` distinguishes type: `file:./` or `file:/data/` = directory (FileTree), `file:./config.toml` or `file:/tmp/foo` = single file (File).
+- Access: `read`, `write`, or `readwrite`.
 "#;
+
+// -- API types and LLM calls ------------------------------------------------
 
 #[derive(Serialize)]
 struct ApiRequest {
@@ -177,36 +360,19 @@ async fn call_llm_raw(
     Ok(code)
 }
 
-fn strip_fences(code: &str) -> Result<String> {
-    let s = code.trim();
-    let s = s.strip_prefix("```rust")
-        .or_else(|| s.strip_prefix("```"))
-        .context("response missing opening ```rust fence")?;
-    let s = s.strip_suffix("```")
-        .context("response missing closing ``` fence")?;
-    Ok(s.trim().to_string())
-}
+// -- Plan orchestration -----------------------------------------------------
 
 const MAX_RETRIES: usize = 3;
 
 /// Generate code, write it, compile it.
 /// On compile failure, feed errors back to the LLM and retry.
 /// Reuses existing plan if one exists for the same inputs.
-/// Returns (plan_dir, final_code).
-async fn plan_and_compile(task: &str) -> Result<(PathBuf, String)> {
+/// Returns (plan_dir, decls, tasks_code).
+async fn plan_and_compile(
+    task: &str,
+) -> Result<(PathBuf, Vec<ResourceDecl>, String)> {
     let catalog = jevs::api::catalog();
     let full_docs = format!("{catalog}\n{RESOURCES_DOCS}");
-    let id = plan_id(task, &full_docs);
-    let plan_dir = plans_dir().join(&id);
-
-    // Reuse existing compiled plan
-    if binary_path(&plan_dir).exists() {
-        let code = std::fs::read_to_string(
-            plan_dir.join("src/tasks.rs"),
-        )?;
-        eprintln!("  reusing existing plan {id}");
-        return Ok((plan_dir, code));
-    }
 
     let api_key =
         std::env::var("ANTHROPIC_API_KEY").context("ANTHROPIC_API_KEY not set")?;
@@ -214,7 +380,7 @@ async fn plan_and_compile(task: &str) -> Result<(PathBuf, String)> {
 
     let user_prompt = format!(
         "Task: {task}\n\nAvailable API:\n{full_docs}\n\n\
-         Generate tasks.rs (just the module body, starting with use statements)."
+         Generate tasks.rs and resource declarations."
     );
 
     let mut messages = vec![Message {
@@ -230,22 +396,32 @@ async fn plan_and_compile(task: &str) -> Result<(PathBuf, String)> {
         };
 
         eprintln!("  attempt {}/{}", attempt + 1, MAX_RETRIES + 1);
-        let code = call_llm_raw(&client, &api_key, &messages).await?;
-        let code = strip_fences(&code)?;
+        let raw = call_llm_raw(&client, &api_key, &messages).await?;
+        let (tasks_code, resource_toml) = parse_response(&raw)?;
+        let decls = parse_resource_decls(&resource_toml)?;
+
+        let id = plan_id(task, &full_docs, &resource_toml);
+        let plan_dir = plans_dir().join(&id);
+
+        // Reuse existing compiled plan
+        if binary_path(&plan_dir).exists() {
+            eprintln!("  reusing existing plan {id}");
+            return Ok((plan_dir, decls, tasks_code));
+        }
 
         // Log the conversation so far + response
         messages.push(Message {
             role: "assistant".to_string(),
-            content: code.clone(),
+            content: raw,
         });
         log_exchange(&id, &messages, &label)?;
 
         // Write and try to compile
-        let plan_dir = write_plan(&id, &code)?;
+        let plan_dir = write_plan(&id, &decls, &tasks_code)?;
         match try_build(&plan_dir) {
             Ok(_) => {
                 eprintln!("  compiled ok");
-                return Ok((plan_dir, code));
+                return Ok((plan_dir, decls, tasks_code));
             }
             Err(stderr) => {
                 if attempt == MAX_RETRIES {
@@ -260,8 +436,10 @@ async fn plan_and_compile(task: &str) -> Result<(PathBuf, String)> {
                     role: "user".to_string(),
                     content: format!(
                         "That code failed to compile. \
-                         Fix ALL errors and output the complete corrected tasks.rs \
-                         in a ```rust``` fenced code block. No explanation.\n\n\
+                         Fix ALL errors and output both blocks: \
+                         the complete corrected ```rust``` tasks.rs \
+                         and the ```toml``` resource declarations. \
+                         No explanation.\n\n\
                          Compiler errors:\n{stderr}"
                     ),
                 });
@@ -272,49 +450,31 @@ async fn plan_and_compile(task: &str) -> Result<(PathBuf, String)> {
     unreachable!()
 }
 
-fn write_plan(id: &str, tasks_code: &str) -> Result<PathBuf> {
+fn write_plan(
+    id: &str,
+    decls: &[ResourceDecl],
+    tasks_code: &str,
+) -> Result<PathBuf> {
     let root = workspace_root();
     let plan_dir = plans_dir().join(id);
     let src_dir = plan_dir.join("src");
     std::fs::create_dir_all(&src_dir)?;
 
-    let cargo_toml = format!(
-        r#"[package]
-name = "plan{id}"
-version = "0.1.0"
-edition = "2021"
-
-[workspace]
-
-[dependencies]
-jevs = {{ path = "{jevs_path}" }}
-tokio = {{ version = "1", features = ["full"] }}
-anyhow = "1"
-"#,
-        jevs_path = root.join("jevs").display(),
-    );
+    let cargo_toml = include_str!("../assets/Cargo.tmpl.toml")
+        .replace("{plan_name}", &format!("plan{id}"))
+        .replace("{jevs_path}", &root.join("jevs").display().to_string());
     std::fs::write(plan_dir.join("Cargo.toml"), cargo_toml)?;
 
-    // Write main.rs from embedded asset
     std::fs::write(
         src_dir.join("main.rs"),
-        include_str!("../assets/plan_main.rs"),
+        include_str!("../assets/main.tmpl.rs"),
     )?;
 
-    // resources.rs: struct + create() dispatch
-    let resources_rs = r#"pub struct Resources {
-    pub fs: jevs::file::File,
-}
+    std::fs::write(
+        src_dir.join("resources.rs"),
+        generate_resources_rs(decls),
+    )?;
 
-pub fn create(key: &jevs::runtime::RuntimeKey) -> Resources {
-    Resources {
-        fs: jevs::file::File::open(key, "."),
-    }
-}
-"#;
-    std::fs::write(src_dir.join("resources.rs"), resources_rs)?;
-
-    // LLM-generated tasks.rs
     std::fs::write(src_dir.join("tasks.rs"), tasks_code)?;
 
     Ok(plan_dir)
@@ -367,9 +527,11 @@ fn tasks_code(plan_dir: &Path) -> Result<String> {
         .context("reading tasks.rs")
 }
 
-fn show_manifest() {
+fn show_manifest(decls: &[ResourceDecl]) {
     eprintln!("This plan requires:\n");
-    eprintln!("  fs:  File<\".\">  read + write");
+    for decl in decls {
+        eprintln!("  {:<8} {:<16} {}", decl.name, decl.url, decl.access);
+    }
 }
 
 /// Prompt for action. Returns 'y' (approve), 't' (show tasks), or 'n' (abort).
@@ -391,10 +553,11 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Plan { task } => {
             eprintln!("Planning: {task}");
-            let (plan_dir, _code) = plan_and_compile(&task).await?;
+            let (plan_dir, decls, _code) =
+                plan_and_compile(&task).await?;
             let id = plan_dir.file_name().unwrap().to_str().unwrap();
             eprintln!("\nPlan {id}");
-            show_manifest();
+            show_manifest(&decls);
             eprintln!("\nRun with: jev run {id}");
         }
         Command::Run { id } => {
@@ -408,9 +571,10 @@ async fn main() -> Result<()> {
         }
         Command::Go { task } => {
             eprintln!("Planning: {task}");
-            let (plan_dir, _code) = plan_and_compile(&task).await?;
+            let (plan_dir, decls, _code) =
+                plan_and_compile(&task).await?;
             eprintln!();
-            show_manifest();
+            show_manifest(&decls);
 
             loop {
                 match prompt_action() {
@@ -434,4 +598,206 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_response_both_blocks() {
+        let raw = r#"Here is code:
+
+```rust
+use crate::resources::Resources;
+
+pub async fn root(res: &mut Resources) -> anyhow::Result<()> {
+    Ok(())
+}
+```
+
+```toml
+[resources.fs]
+url = "file:./"
+access = "readwrite"
+```
+"#;
+        let (rust, toml) = parse_response(raw).unwrap();
+        assert!(rust.contains("pub async fn root"));
+        assert!(toml.contains("[resources.fs]"));
+    }
+
+    #[test]
+    fn parse_response_missing_toml() {
+        let raw = "```rust\nfn main() {}\n```\n";
+        let err = parse_response(raw).unwrap_err();
+        assert!(
+            format!("{err}").contains("toml"),
+            "error should mention toml: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_response_missing_rust() {
+        let raw = "```toml\n[resources.fs]\nurl = \"file:.\"\naccess = \"read\"\n```\n";
+        let err = parse_response(raw).unwrap_err();
+        assert!(
+            format!("{err}").contains("rust"),
+            "error should mention rust: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_decls_single() {
+        let toml = r#"
+[resources.fs]
+url = "file:./"
+access = "readwrite"
+"#;
+        let decls = parse_resource_decls(toml).unwrap();
+        assert_eq!(decls.len(), 1);
+        assert_eq!(decls[0].name, "fs");
+        assert_eq!(decls[0].url, "file:./");
+        assert_eq!(decls[0].access, Access::ReadWrite);
+    }
+
+    #[test]
+    fn parse_decls_multiple_sorted() {
+        let toml = r#"
+[resources.data]
+url = "file:/data/"
+access = "read"
+
+[resources.fs]
+url = "file:./"
+access = "readwrite"
+"#;
+        let decls = parse_resource_decls(toml).unwrap();
+        assert_eq!(decls.len(), 2);
+        assert_eq!(decls[0].name, "data");
+        assert_eq!(decls[1].name, "fs");
+    }
+
+    #[test]
+    fn parse_decls_bad_scheme() {
+        let toml = r#"
+[resources.web]
+url = "https://example.com"
+access = "read"
+"#;
+        let err = parse_resource_decls(toml).unwrap_err();
+        assert!(
+            format!("{err}").contains("unsupported URL scheme"),
+            "error should mention scheme: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_decls_bad_access() {
+        let toml = r#"
+[resources.fs]
+url = "file:."
+access = "execute"
+"#;
+        let err = parse_resource_decls(toml).unwrap_err();
+        assert!(
+            format!("{err}").contains("unknown access mode"),
+            "error should mention access: {err}"
+        );
+    }
+
+    #[test]
+    fn generate_resources_dir() {
+        let decls = vec![ResourceDecl {
+            name: "fs".to_string(),
+            url: "file:./".to_string(),
+            access: Access::ReadWrite,
+        }];
+        let rs = generate_resources_rs(&decls);
+        assert!(rs.contains("pub fs: jevs::file::FileTree,"));
+        assert!(rs.contains("fs: jevs::file::FileTree::open(key, \".\"),"));
+    }
+
+    #[test]
+    fn generate_resources_file() {
+        let decls = vec![ResourceDecl {
+            name: "config".to_string(),
+            url: "file:./config.toml".to_string(),
+            access: Access::Read,
+        }];
+        let rs = generate_resources_rs(&decls);
+        assert!(rs.contains("pub config: jevs::file::File,"));
+        assert!(rs.contains(
+            "config: jevs::file::File::open(key, \"./config.toml\"),"
+        ));
+    }
+
+    #[test]
+    fn generate_resources_mixed() {
+        let decls = vec![
+            ResourceDecl {
+                name: "data".to_string(),
+                url: "file:/data/".to_string(),
+                access: Access::Read,
+            },
+            ResourceDecl {
+                name: "out".to_string(),
+                url: "file:/tmp/result.txt".to_string(),
+                access: Access::Write,
+            },
+        ];
+        let rs = generate_resources_rs(&decls);
+        assert!(rs.contains("pub data: jevs::file::FileTree,"));
+        assert!(rs.contains("pub out: jevs::file::File,"));
+        assert!(rs.contains(
+            "data: jevs::file::FileTree::open(key, \"/data\"),"
+        ));
+        assert!(rs.contains(
+            "out: jevs::file::File::open(key, \"/tmp/result.txt\"),"
+        ));
+    }
+
+    #[test]
+    fn plan_id_includes_resource_toml() {
+        let id1 = plan_id("task", "catalog", "toml-a");
+        let id2 = plan_id("task", "catalog", "toml-b");
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn extract_fenced_basic() {
+        let text = "before\n```rust\nfn main() {}\n```\nafter";
+        let result = extract_fenced(text, "rust").unwrap();
+        assert_eq!(result, "fn main() {}");
+    }
+
+    #[test]
+    fn parse_url_dir() {
+        let (scheme, path, is_dir) = parse_url("file:./").unwrap();
+        assert_eq!(scheme, "file");
+        assert_eq!(path, "./");
+        assert!(is_dir);
+    }
+
+    #[test]
+    fn parse_url_file() {
+        let (scheme, path, is_dir) = parse_url("file:/tmp/foo").unwrap();
+        assert_eq!(scheme, "file");
+        assert_eq!(path, "/tmp/foo");
+        assert!(!is_dir);
+    }
+
+    #[test]
+    fn parse_url_abs_dir() {
+        let (_, path, is_dir) = parse_url("file:/data/").unwrap();
+        assert_eq!(path, "/data/");
+        assert!(is_dir);
+    }
+
+    #[test]
+    fn parse_url_relative_file() {
+        let (_, path, is_dir) = parse_url("file:./config.toml").unwrap();
+        assert_eq!(path, "./config.toml");
+        assert!(!is_dir);
+    }
 }

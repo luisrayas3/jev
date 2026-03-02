@@ -357,13 +357,16 @@ that a task actually holds a resource handle
 before it can use it.
 
 **Filesystem uses `&`/`&mut` naturally.**
-`&File` is read access, `&mut File` is write access.
+Two types: `File` (single file) and `FileTree` (directory).
+`&File` / `&FileTree` is read access,
+`&mut File` / `&mut FileTree` is write access.
 The borrow checker prevents concurrent read/write
 conflicts automatically:
 
 ```rust
-fn summarize(fs: &File) { ... }        // read
-fn write_report(fs: &mut File) { ... } // write
+fn read_config(cfg: &File) { ... }          // single file, read
+fn summarize(fs: &FileTree) { ... }         // directory, read
+fn write_report(fs: &mut FileTree) { ... }  // directory, write
 ```
 
 **Service resources use capability-typed handles.**
@@ -445,8 +448,9 @@ Resources are scoped to specific external entities.
 The scope and trust level are encoded in the type,
 making both compile-time constraints.
 
-**Filesystem**: scoped by root path,
-split by trust level.
+**Filesystem**: `File` for single files,
+`FileTree` for directory trees,
+split by trust level (future).
 `TrustedFile<"/data">`: known-good local files,
 data usable directly.
 `UntrustedFile<"/uploads">`: external input,
@@ -574,7 +578,8 @@ this closes the escape hatch.
 
 ### Permission manifest
 
-The manifest is derived from `resources.rs`
+The manifest is derived
+from parsed resource declarations
 and is the user-facing audit surface:
 
 ```
@@ -595,6 +600,87 @@ can be annotated.
 The user approves this list,
 not source code.
 
+### Resource declarations
+
+The LLM outputs two fenced blocks:
+tasks.rs code (```rust```)
+and resource declarations (```toml```).
+The orchestrator parses both,
+generates `resources.rs` from the declarations,
+and compiles the plan.
+
+**Declaration format:**
+
+```toml
+[resources.fs]
+url = "file:./"
+access = "readwrite"
+
+[resources.config]
+url = "file:./config.toml"
+access = "read"
+```
+
+**URL as universal resource identifier.**
+A single `url` field across all resource kinds.
+The scheme determines the kind:
+`file:` maps to `File` or `FileTree`
+(trailing `/` = directory),
+`https:` maps to `Web` (future),
+`mailto:` maps to `Email` (future),
+`calendar:` maps to `Calendar` (future).
+URL + access gives natural uniqueness,
+which the orchestrator needs for tree merging.
+
+**Field semantics:**
+- `[resources.<name>]`: name = struct field name,
+  what the LLM uses as `res.<name>` in tasks.rs.
+- `access`: `read`, `write`, or `readwrite`.
+  For `mailto:`, access also distinguishes
+  inbox (read) from outbox (write).
+- Type-specific filters (future) sit alongside URL
+  as additional narrowing
+  (e.g., `senders`, `recipients`).
+
+**Trust in declarations.**
+Trust will be declared per resource
+once trust-level types land (Phase 3).
+The planner needs to know the concrete Rust type
+to generate code that compiles;
+a `TrustedFile` read returns data directly,
+while an `UntrustedFile` read returns `Unverified<T>`.
+The orchestrator cannot resolve trust silently
+because the LLM must write code
+against the correct type signatures.
+
+Planned declaration format with trust:
+
+```toml
+[resources.data]
+url = "file:/data"
+access = "read"
+trust = "trusted"
+
+[resources.uploads]
+url = "file:/uploads"
+access = "read"
+trust = "untrusted"
+```
+
+The `trust` field maps to concrete Rust types:
+`trusted` + `file:` maps to `TrustedFile`,
+`untrusted` + `file:` maps to `UntrustedFile`.
+Until trust-level types are implemented,
+the `trust` field is not present
+and all resources use the base type (`File`).
+
+**Stash** is not a resource;
+it's a task-local helper, no grant needed.
+
+**Order**: the LLM outputs tasks first,
+resources second.
+The parser expects ```rust``` then ```toml```.
+
 ### Plan project structure
 
 ```
@@ -602,7 +688,7 @@ plans/<id>/
 ├── Cargo.toml
 └── src/
     ├── main.rs        -- fixed shim (embedded asset)
-    ├── resources.rs   -- resource declarations (audited)
+    ├── resources.rs   -- generated from declarations
     └── tasks.rs       -- task implementations (LLM-generated)
 ```
 
@@ -612,10 +698,12 @@ calls `resources::create(&key)`,
 then passes the result to `tasks::root()`.
 This is the same for every plan.
 
-`resources.rs` is the auditable dispatch:
-a struct declaring which resources the plan uses
-and a `create` function that constructs them.
-This is what the permission manifest is derived from.
+`resources.rs` is auto-generated
+from the LLM's TOML resource declarations.
+The orchestrator maps each declaration
+to a struct field and constructor call.
+This is what the permission manifest
+is derived from.
 
 ## Implementation phases
 
@@ -642,20 +730,30 @@ it isn't trustworthy.
   tasks never receive it
 - Split plan into `resources.rs` + `tasks.rs`
 - Fixed orchestrator-generated `main.rs` (embedded asset)
-- `resources.rs` as auditable dispatch
+- `resources.rs` auto-generated
+  from LLM TOML declarations
   (struct + `create(&key)`)
-- Permission manifest UX
-  (structured resource display, not raw code)
+- LLM outputs two fenced blocks:
+  ```rust``` (tasks.rs) + ```toml``` (resource decls)
+- URL-based resource identification
+  (`file:./` = directory, `file:./config.toml` = file)
+- Permission manifest derived from declarations
+  (name, URL, access)
 - Stash: plan-local blob storage,
   created by tasks directly (no key required)
 - Per-module `API_DOCS` + `jevs::api::catalog()`
 - Qualified imports (no `use jevs::*`)
+- Cargo.toml as embedded template asset
 
 **Phase 3: Real-world resources**
 - Trust-level resource types
   (`TrustedWeb`/`UntrustedWeb`,
   `TrustedEmailInbox`/`UntrustedEmailInbox`,
   `EmailOutbox`, `TrustedFile`/`UntrustedFile`)
+- `trust` field in resource declarations
+  (maps to concrete Rust types;
+  planner must know the type to generate
+  code that compiles against trust constraints)
 - Opinionated web resource
   (`Web::fetch(url) -> Document`,
   `Api::get`, `Api::post`)

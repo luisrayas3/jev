@@ -219,9 +219,13 @@ with decisions and changes from this session
   aggregates them for the planner prompt
 - The planner prompt in `jev/src/main.rs` must stay
   in sync with the actual `jevs` public API
-- Constructor APIs (`File::open`, `RuntimeKey::init`)
-  are deliberately undocumented in the planner prompt;
-  tasks should never call them
+- Constructor APIs (`File::open`, `FileTree::open`,
+  `RuntimeKey::init`) are deliberately undocumented
+  in the planner prompt; tasks should never call them
+- Plan assets live in `jev/assets/`:
+  `main.tmpl.rs` (fixed shim),
+  `Cargo.tmpl.toml` (template with
+  `{plan_name}`, `{jevs_path}` placeholders)
 - E2e test uses fish and requires `.env`
   with `ANTHROPIC_API_KEY`
 
@@ -232,24 +236,36 @@ with decisions and changes from this session
 
 **What's implemented**:
 - `jevs` library: `file`, `stash`, `text`, `trust`,
-  `runtime` modules with per-module `API_DOCS`
+  `runtime` modules with per-module API docs
+- `jevs::file::File` (single file) and
+  `jevs::file::FileTree` (directory tree);
+  trailing `/` in URL distinguishes them
 - `jevs::api::catalog()` aggregates module docs
 - `jev` CLI with `plan`, `run`, and `go` subcommands
 - LLM integration via Anthropic API
+- LLM outputs two fenced blocks:
+  ```rust``` (tasks.rs) + ```toml``` (resource decls)
+- Resource declarations: TOML with URL + access,
+  auto-generates `resources.rs`
+  (struct + `create(&key)`)
+- URL-based resource identification
+  (`file:./` = directory, `file:./foo` = file)
 - RuntimeKey barrier: `RuntimeKey::init(random)`
   called once by plan main.rs;
-  `File::open(&key, root)` requires the key;
+  `File::open` / `FileTree::open` require the key;
   tasks never receive it
-- Permission manifest UX:
-  structured resource display, not raw code
+- Permission manifest derived from declarations
+  (name, URL, access)
 - Plan structure: `main.rs` (embedded asset) +
-  `resources.rs` (generated, auditable dispatch) +
+  `resources.rs` (auto-generated from decls) +
   `tasks.rs` (LLM)
+- Cargo.toml template asset
+  (`jev/assets/Cargo.tmpl.toml`)
 - Qualified imports (`jevs::file::File`,
-  not `use jevs::*`)
+  `jevs::file::FileTree`, not `use jevs::*`)
 - Compile error feedback loop
   (retry with error context, up to 4 attempts)
-- Unit tests (11) + e2e test (fish, full pipeline)
+- Unit tests (30) + e2e test (fish, full pipeline)
 
 **What's NOT implemented yet**:
 - Task tree decomposition
