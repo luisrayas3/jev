@@ -219,36 +219,41 @@ with decisions and changes from this session
   aggregates them for the planner prompt
 - The planner prompt in `jev/src/main.rs` must stay
   in sync with the actual `jevs` public API
+- Constructor APIs (`File::open`, `RuntimeKey::init`)
+  are deliberately undocumented in the planner prompt;
+  tasks should never call them
 - E2e test uses fish and requires `.env`
   with `ANTHROPIC_API_KEY`
 
 ## Current status
 
-**Phase**: 2 core complete
+**Phase**: 2 complete
 (see architecture.md for phased roadmap)
 
 **What's implemented**:
-- `jevs` library: `file`, `text`, `trust`, `runtime`
-  modules with per-module `API_DOCS` constants
+- `jevs` library: `file`, `stash`, `text`, `trust`,
+  `runtime` modules with per-module `API_DOCS`
 - `jevs::api::catalog()` aggregates module docs
-- `jevsr` runtime crate (resource constructors)
 - `jev` CLI with `plan`, `run`, and `go` subcommands
 - LLM integration via Anthropic API
-- Compilation boundary:
-  `RuntimeKey` guards resource construction,
-  `check_boundary()` rejects jevsr in task code
+- RuntimeKey barrier: `RuntimeKey::init(random)`
+  called once by plan main.rs;
+  `File::open(&key, root)` requires the key;
+  tasks never receive it
+- Permission manifest UX:
+  structured resource display, not raw code
 - Plan structure: `main.rs` (embedded asset) +
-  `resources.rs` (generated) + `tasks.rs` (LLM)
+  `resources.rs` (generated, auditable dispatch) +
+  `tasks.rs` (LLM)
 - Qualified imports (`jevs::file::File`,
   not `use jevs::*`)
 - Compile error feedback loop
   (retry with error context, up to 4 attempts)
-- Unit tests (7) + e2e test (fish, full pipeline)
+- Unit tests (11) + e2e test (fish, full pipeline)
 
 **What's NOT implemented yet**:
 - Task tree decomposition
   (expand down / resolve up planning loop)
-- Permission manifest extraction and approval UX
 - Containerized execution
 - Additional resource types
   (email, calendar, knowledge base, HTTP)

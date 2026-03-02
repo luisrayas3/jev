@@ -11,16 +11,15 @@ jevs/                 -- library crate (typed resource APIs)
 │   ├── lib.rs          -- module declarations
 │   ├── api.rs          -- per-module doc aggregator
 │   ├── file.rs         -- filesystem resource
+│   ├── stash.rs        -- plan-local blob storage
 │   ├── text.rs         -- pure text operations
 │   ├── trust.rs        -- trust-level types
-│   └── runtime.rs      -- runtime key (hidden from LLM)
-jevsr/                  -- runtime crate (resource constructors)
-├── src/
-│   └── lib.rs          -- open_file, etc.
+│   └── runtime.rs      -- RuntimeKey (init-once barrier)
 jev/                    -- CLI binary
 ├── src/
 │   └── main.rs         -- plan / run / go commands
-jev/assets/plan_main.rs -- fixed shim written into plans
+├── assets/
+│   └── plan_main.rs    -- fixed shim written into plans
 plans/                  -- generated programs land here
 tests/
 ├── e2e.fish            -- full pipeline test (fish)

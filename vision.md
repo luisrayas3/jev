@@ -36,11 +36,11 @@ You approve the permissions,
 and the compiler guarantees
 the plan can't exceed them.
 
-Resource constructors live in a dedicated module
-that only the orchestrator controls.
+Resource constructors require a RuntimeKey,
+initialized once at startup with a random value.
 Task code receives resources as function parameters
-and literally cannot construct new ones;
-the symbols aren't available at compile time.
+and cannot construct new ones;
+it has no access to the key.
 The plan runs in a container
 where only approved resources are mounted.
 

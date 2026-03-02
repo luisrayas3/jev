@@ -21,9 +21,9 @@ with two core loops:
 The Rust type system and borrow checker
 enforce resource access, trust levels,
 and subagent capabilities at compile time.
-A separate compilation boundary ensures
+A RuntimeKey barrier ensures
 task code cannot construct resources;
-only the orchestrator-controlled root can.
+only the plan's main.rs can.
 
 ## Design principles
 
@@ -37,11 +37,12 @@ no hoping the LLM follows instructions.
 
 **Resources are injected, never constructed by tasks.**
 Task code receives resources as function parameters.
-Resource constructors live in a separate module
-compiled with different symbol visibility.
-Task code literally cannot name constructors;
-they aren't in scope.
-This is a compilation boundary, not a convention.
+Resource constructors require a `RuntimeKey`,
+which is initialized once at startup
+with a random value tasks cannot guess.
+Tasks cannot call `init` (already called)
+or construct resources (no key).
+This is a runtime barrier, not a convention.
 
 **The library API is the product.**
 The value is in typed resource APIs
@@ -289,19 +290,18 @@ This is the core product.
 Encodes safety via Rust's type system
 so the compiler enforces it.
 Exposes two layers:
-- **Operations** (default): `read`, `write`, `glob`, etc.
-  Available to all task code.
+- **Operations** (default): `read`, `write`, `glob`,
+  `stash`, etc. Available to all task code.
 - **Constructors** (`File::open`, etc.):
-  Require `RuntimeKey`, not available in task code.
+  Require `&RuntimeKey`.
+  `RuntimeKey::init` is called once by the plan's
+  main.rs with a random value;
+  tasks never receive the key.
+  Constructor APIs are undocumented
+  in the planner prompt.
 Each module has `pub const API_DOCS`
 documenting its API for the planner.
 `jevs::api::catalog()` aggregates all module docs.
-
-**jevsr** (runtime crate):
-Resource constructors (`open_file`, etc.).
-Depends on `jevs` and holds the `RuntimeKey` magic.
-Only `resources.rs` (orchestrator-generated) uses this;
-task code is rejected if it references `jevsr`.
 
 **jev** (binary crate):
 CLI that runs the planning loop
@@ -405,12 +405,12 @@ can be used concurrently without conflict:
 reading email while sending is fine
 because they're separate types.
 
-**Resource construction is root-only.**
-Only the resource module can call constructors
-like `File::open`.
-Task code receives resources as parameters.
-This is enforced at compile time
-via a compilation boundary.
+**Resource construction requires RuntimeKey.**
+Constructors like `File::open` take `&RuntimeKey`.
+`RuntimeKey::init(random)` is called once
+by the plan's main.rs before any task code runs.
+Tasks cannot call `init` (already called, returns Err)
+or guess the random key.
 
 **Stash is plan-local content-addressed storage.**
 Plans sometimes need to materialize
@@ -421,17 +421,18 @@ or shared between plan components.
 with content-addressed semantics:
 
 ```rust
-let stash = Stash::new();
-let handle = stash.put(&large_data)?;  // -> Hash
+let stash = jevs::stash::Stash::new()?;
+let handle = stash.put(&large_data).await?;  // -> Hash
 // ...later, possibly in another task...
-let data = stash.get(&handle)?;
+let data = stash.get(&handle).await?;
 ```
 
 No naming, no paths, no conflicts;
 the hash is the reference.
-Stash is allocated by the runtime,
-scoped to the plan's execution,
-and cleaned up afterward.
+Tasks create stash instances directly
+(no RuntimeKey required).
+Stash is scoped to the plan's execution
+and cleaned up on drop.
 It requires no resource grant
 because it's internal working memory,
 not access to external resources.
@@ -567,7 +568,7 @@ each granted resource maps to a mount or network rule.
 are not useful inside the container
 because nothing is mounted
 beyond what the grants specify.
-Combined with the compilation boundary
+Combined with the RuntimeKey barrier
 (task code can't construct resources),
 this closes the escape hatch.
 
@@ -600,15 +601,21 @@ not source code.
 plans/<id>/
 ├── Cargo.toml
 └── src/
-    ├── main.rs        -- fixed shim (not LLM-generated)
+    ├── main.rs        -- fixed shim (embedded asset)
     ├── resources.rs   -- resource declarations (audited)
-    └── tasks.rs       -- task implementations (no constructors)
+    └── tasks.rs       -- task implementations (LLM-generated)
 ```
 
-`main.rs` is orchestrator-generated, not LLM-generated.
-It calls `resources::create()`
+`main.rs` is a fixed embedded asset, not LLM-generated.
+It initializes a random RuntimeKey,
+calls `resources::create(&key)`,
 then passes the result to `tasks::root()`.
 This is the same for every plan.
+
+`resources.rs` is the auditable dispatch:
+a struct declaring which resources the plan uses
+and a `create` function that constructs them.
+This is what the permission manifest is derived from.
 
 ## Implementation phases
 
@@ -629,19 +636,20 @@ it isn't trustworthy.
 - Single `main.rs` per plan (flat, no task tree)
 - LLM exchange logging for prompt iteration
 
-**Phase 2 (core done): Safety foundation**
-- Compilation boundary via `RuntimeKey` +
-  `check_boundary()` rejection of jevsr in task code
+**Phase 2 (done): Safety foundation**
+- RuntimeKey barrier: `init(random)` once at startup,
+  `File::open(&key, root)` requires the key,
+  tasks never receive it
 - Split plan into `resources.rs` + `tasks.rs`
 - Fixed orchestrator-generated `main.rs` (embedded asset)
-- `jevsr` runtime crate for resource constructors
+- `resources.rs` as auditable dispatch
+  (struct + `create(&key)`)
+- Permission manifest UX
+  (structured resource display, not raw code)
+- Stash: plan-local blob storage,
+  created by tasks directly (no key required)
 - Per-module `API_DOCS` + `jevs::api::catalog()`
 - Qualified imports (no `use jevs::*`)
-- Remaining:
-  permission manifest extraction,
-  user approval UX,
-  simple subagent interface,
-  stash
 
 **Phase 3: Real-world resources**
 - Trust-level resource types

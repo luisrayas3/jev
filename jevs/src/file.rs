@@ -36,9 +36,8 @@ pub struct File {
 
 impl File {
     /// Open a filesystem resource rooted at `root`.
-    /// Requires a `RuntimeKey`, not available in generated task code.
-    pub fn open(key: RuntimeKey, root: &str) -> Self {
-        let _ = key;
+    /// Requires a `&RuntimeKey`; only `main` holds one.
+    pub fn open(_key: &RuntimeKey, root: &str) -> Self {
         let root = std::fs::canonicalize(root)
             .unwrap_or_else(|_| PathBuf::from(root));
         File { root, _private: () }
@@ -96,14 +95,17 @@ impl File {
 mod tests {
     use super::*;
 
-    fn test_key() -> RuntimeKey {
-        RuntimeKey::new(0x6A65_7673)
+    use std::sync::OnceLock;
+
+    fn test_key() -> &'static RuntimeKey {
+        static KEY: OnceLock<RuntimeKey> = OnceLock::new();
+        KEY.get_or_init(|| RuntimeKey::init(0).unwrap())
     }
 
     #[tokio::test]
     async fn read_and_write() {
         let dir = tempfile::tempdir().unwrap();
-        let mut f = File::open(test_key(), dir.path().to_str().unwrap());
+        let mut f = File::open(&test_key(), dir.path().to_str().unwrap());
         f.write("hello.txt", "hello world").await.unwrap();
         let content = f.read("hello.txt").await.unwrap();
         assert_eq!(content, "hello world");
@@ -112,7 +114,7 @@ mod tests {
     #[tokio::test]
     async fn glob_matches() {
         let dir = tempfile::tempdir().unwrap();
-        let mut f = File::open(test_key(), dir.path().to_str().unwrap());
+        let mut f = File::open(&test_key(), dir.path().to_str().unwrap());
         f.write("a.txt", "a").await.unwrap();
         f.write("b.txt", "b").await.unwrap();
         f.write("c.md", "c").await.unwrap();
@@ -124,7 +126,7 @@ mod tests {
     #[tokio::test]
     async fn read_missing_file() {
         let dir = tempfile::tempdir().unwrap();
-        let f = File::open(test_key(), dir.path().to_str().unwrap());
+        let f = File::open(&test_key(), dir.path().to_str().unwrap());
         assert!(f.read("nope.txt").await.is_err());
     }
 }

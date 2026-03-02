@@ -48,13 +48,16 @@ pub struct Stash {
 impl Stash {
     /// Create a new stash backed by a temporary directory.
     pub fn new() -> Result<Self> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
         let root = std::env::temp_dir().join(format!(
-            "jev-stash-{}-{}",
+            "jev-stash-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            COUNTER.fetch_add(1, Ordering::Relaxed),
         ));
         std::fs::create_dir_all(&root).context("creating stash directory")?;
         Ok(Stash { root })

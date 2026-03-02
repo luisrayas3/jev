@@ -72,11 +72,13 @@ Your code receives a `&mut Resources` with these fields:
 ```rust
 pub struct Resources {
     pub fs: jevs::file::File,    // filesystem rooted at "."
-    pub stash: jevs::stash::Stash, // content-addressed blob storage
 }
 ```
-Access resources through `res.fs` and `res.stash`,
-not by constructing them.
+Access the filesystem through `res.fs`.
+Do not construct resources yourself.
+
+For temporary storage, create a stash directly:
+`let stash = jevs::stash::Stash::new()?;`
 "#;
 
 const SYSTEM_PROMPT: &str = r#"You are a Rust code generator for the jev agent system.
@@ -89,8 +91,8 @@ Rules:
 - Do NOT use `use jevs::*;` - use qualified paths like `jevs::file::File`, `jevs::text::line_count`, `jevs::trust::Unverified`.
 - Implement `pub async fn root(res: &mut Resources) -> anyhow::Result<()>`
 - Access the filesystem through `res.fs` (it's a `jevs::file::File`).
-- Access the stash through `res.stash` (it's a `jevs::stash::Stash`).
-- Do NOT construct File, Stash, use RuntimeKey, or reference jevsr. Resources are pre-constructed.
+- For temporary storage, create a stash: `let stash = jevs::stash::Stash::new()?;`
+- Do NOT construct resources. They are provided via the Resources struct.
 - `res.fs.read()` and `res.fs.glob()` take `&self` (shared read access).
 - `res.fs.write()` takes `&mut self` (exclusive write access).
 - Use `tokio::join!` for parallel reads.
@@ -175,23 +177,6 @@ async fn call_llm_raw(
     Ok(code)
 }
 
-/// Check that tasks.rs doesn't reference jevsr, RuntimeKey, or File::open.
-fn check_boundary(code: &str) -> Result<()> {
-    let violations: Vec<&str> = ["jevsr", "RuntimeKey", "File::open", "Stash::new"]
-        .into_iter()
-        .filter(|term| code.contains(term))
-        .collect();
-
-    if !violations.is_empty() {
-        bail!(
-            "Boundary violation: tasks.rs must not reference {}. \
-             Resources are provided via the Resources struct.",
-            violations.join(", ")
-        );
-    }
-    Ok(())
-}
-
 fn strip_fences(code: &str) -> Result<String> {
     let s = code.trim();
     let s = s.strip_prefix("```rust")
@@ -255,28 +240,6 @@ async fn plan_and_compile(task: &str) -> Result<(PathBuf, String)> {
         });
         log_exchange(&id, &messages, &label)?;
 
-        // Check boundary before writing
-        if let Err(e) = check_boundary(&code) {
-            if attempt == MAX_RETRIES {
-                bail!(
-                    "Boundary violation after {} attempts: {e}",
-                    MAX_RETRIES + 1
-                );
-            }
-            eprintln!("  boundary violation, retrying...");
-            messages.push(Message {
-                role: "user".to_string(),
-                content: format!(
-                    "That code violates the compilation boundary: {e}\n\n\
-                     Do NOT construct File, use RuntimeKey, or reference jevsr.\n\
-                     Access resources through `res.fs`.\n\n\
-                     Fix ALL issues and output the complete corrected tasks.rs \
-                     in a ```rust``` fenced code block. No explanation."
-                ),
-            });
-            continue;
-        }
-
         // Write and try to compile
         let plan_dir = write_plan(&id, &code)?;
         match try_build(&plan_dir) {
@@ -325,14 +288,11 @@ edition = "2021"
 
 [dependencies]
 jevs = {{ path = "{jevs_path}" }}
-jevsr = {{ path = "{jevsr_path}" }}
 tokio = {{ version = "1", features = ["full"] }}
 anyhow = "1"
 "#,
         jevs_path = root.join("jevs").display(),
-        jevsr_path = root.join("jevsr").display(),
     );
-
     std::fs::write(plan_dir.join("Cargo.toml"), cargo_toml)?;
 
     // Write main.rs from embedded asset
@@ -341,22 +301,20 @@ anyhow = "1"
         include_str!("../assets/plan_main.rs"),
     )?;
 
-    // Generate resources.rs
-    let resources_code = r#"pub struct Resources {
+    // resources.rs: struct + create() dispatch
+    let resources_rs = r#"pub struct Resources {
     pub fs: jevs::file::File,
-    pub stash: jevs::stash::Stash,
 }
 
-pub fn create() -> anyhow::Result<Resources> {
-    Ok(Resources {
-        fs: jevsr::open_file("."),
-        stash: jevs::stash::Stash::new()?,
-    })
+pub fn create(key: &jevs::runtime::RuntimeKey) -> Resources {
+    Resources {
+        fs: jevs::file::File::open(key, "."),
+    }
 }
 "#;
-    std::fs::write(src_dir.join("resources.rs"), resources_code)?;
+    std::fs::write(src_dir.join("resources.rs"), resources_rs)?;
 
-    // Write LLM-generated tasks.rs
+    // LLM-generated tasks.rs
     std::fs::write(src_dir.join("tasks.rs"), tasks_code)?;
 
     Ok(plan_dir)
@@ -404,27 +362,19 @@ fn build_plan(plan_dir: &Path) -> Result<PathBuf> {
     Ok(binary_path(plan_dir))
 }
 
-fn resources_code(plan_dir: &Path) -> Result<String> {
-    std::fs::read_to_string(plan_dir.join("src/resources.rs"))
-        .context("reading resources.rs")
-}
-
 fn tasks_code(plan_dir: &Path) -> Result<String> {
     std::fs::read_to_string(plan_dir.join("src/tasks.rs"))
         .context("reading tasks.rs")
 }
 
-fn show_resources(plan_dir: &Path) -> Result<()> {
-    let code = resources_code(plan_dir)?;
-    eprintln!("--- resources.rs ---");
-    eprint!("{code}");
-    eprintln!("--- end ---");
-    Ok(())
+fn show_manifest() {
+    eprintln!("This plan requires:\n");
+    eprintln!("  fs:  File<\".\">  read + write");
 }
 
 /// Prompt for action. Returns 'y' (approve), 't' (show tasks), or 'n' (abort).
 fn prompt_action() -> char {
-    eprint!("Approve? [y/N/t=show tasks] ");
+    eprint!("\nApprove? [y/N/t=show tasks] ");
     let mut input = String::new();
     std::io::stdin().read_line(&mut input).ok();
     match input.trim() {
@@ -444,7 +394,7 @@ async fn main() -> Result<()> {
             let (plan_dir, _code) = plan_and_compile(&task).await?;
             let id = plan_dir.file_name().unwrap().to_str().unwrap();
             eprintln!("\nPlan {id}");
-            show_resources(&plan_dir)?;
+            show_manifest();
             eprintln!("\nRun with: jev run {id}");
         }
         Command::Run { id } => {
@@ -460,7 +410,7 @@ async fn main() -> Result<()> {
             eprintln!("Planning: {task}");
             let (plan_dir, _code) = plan_and_compile(&task).await?;
             eprintln!();
-            show_resources(&plan_dir)?;
+            show_manifest();
 
             loop {
                 match prompt_action() {
