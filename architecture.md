@@ -19,7 +19,8 @@ with two core loops:
    deterministic work runs as native code.
 
 The Rust type system and borrow checker
-enforce resource access, trust levels,
+enforce resource access,
+information flow (confidentiality and integrity),
 and subagent capabilities at compile time.
 A RuntimeKey barrier ensures
 task code cannot construct resources;
@@ -28,8 +29,13 @@ only the plan's main.rs can.
 ## Design principles
 
 **The type system is the security model.**
-Resource access, trust levels,
-and subagent capabilities are encoded as types.
+Two axes from information flow control:
+confidentiality (who can see data)
+and integrity (who has endorsed data).
+Both are encoded as types.
+Resource access, information flow labels,
+and subagent capabilities
+are all compile-time constraints.
 If it compiles, the access patterns are valid.
 No runtime permission checks,
 no hoping the LLM follows instructions.
@@ -52,11 +58,14 @@ and unsafe ones unrepresentable.
 A summarizer receives `&File` (read-only).
 A report writer receives `&mut File`
 scoped to an output directory.
-A notification task receives `&EmailOutbox<"addr">`
+A notification task receives `&EmailOutbox`
 but never an inbox handle;
 it can send but not snoop.
-An `UntrustedWeb` read returns `Unverified<T>`;
-a `TrustedFile` read doesn't.
+Data from low-integrity resources
+is labeled and cannot flow
+into high-integrity actions.
+Private data cannot flow
+to world-visible outputs.
 The compiler proves these constraints
 before anything runs.
 
@@ -207,59 +216,102 @@ not the whole tree.
 
 ### Subagent model
 
-The compiled plan orchestrates LLM calls at runtime.
-These calls are typed and resource-constrained:
+Runtime subagents are LLM calls
+that the compiled plan invokes during execution.
+All runtime subagents execute inside sandboxes
+(see [sandboxing](#sandboxing)).
+There are two kinds,
+plus deterministic work that needs no LLM.
 
-**Specialized subagents**: highly typed interfaces.
-A classifier might have a concrete enum return type
-and use a small, cheap, fast model
-(possibly running locally).
-The function signature defines exactly
-what goes in and what comes out.
-
-```rust
-// Hypothetical: small model, concrete types
-enum Sentiment { Positive, Neutral, Negative }
-let result: Sentiment = classify(&text).await;
-```
-
-**General subagents**: frontier models
-with broader capabilities
-but still resource-constrained.
-They receive specific resources via function arguments,
-and the borrow checker ensures
-they can only access what's passed in.
+**Vanilla subagents** run an LLM in a sandbox.
+The LLM can use tools exposed by mounted resources
+and optionally run shell commands.
+Everything in the sandbox's context
+(data the LLM sees, resources it can call)
+is subject to information flow rules.
+The sandbox's labels are the lattice join
+of all inputs: most restrictive confidentiality,
+least trustworthy integrity.
 
 ```rust
-// Frontier model, but scoped to read-only fs access
-let summary = summarize(&fs, &files).await;
+// Classifier: small model, bounded output type.
+// Sentiment is Declassifiable,
+// so output is clean despite tainted input.
+let sentiment: Sentiment = sandbox.call(
+    model::fast, classify_prompt,
+).await?;
 
-// Gets write access to output dir only
-generate_report(&mut out_fs, &data).await;
+// Summarizer: frontier model, string output.
+// String is not Declassifiable,
+// so output carries the sandbox's labels.
+let summary: Labeled<String> = sandbox.call(
+    model::frontier, summarize_prompt,
+).await?;
 ```
 
-**No subagent needed**: deterministic work
-compiles to native code.
+The critical safety rule:
+if any input to the sandbox has low integrity,
+the sandbox cannot also hold
+action-capable resources.
+An action resource's methods require
+a minimum integrity level on their inputs;
+the sandbox's integrity (derived from mounts)
+must satisfy that requirement
+or construction is a compile error.
+The container enforces this at runtime too:
+unmounted resources are unreachable,
+even via shell.
+
+**Jev planner subagents** run a nested jev
+planning loop instead of a direct LLM call.
+The planner receives:
+
+1. *Planning context*: task description
+   and resource type signatures.
+   Subject to normal information flow rules.
+2. *Resource handles*: the generated plan
+   will wire these together,
+   but the planner does not read their data.
+   These do not taint the planning context.
+
+The planner generates Rust code
+that `rustc` compiles,
+proving the information flow between resources
+is safe.
+This means a jev planner subagent
+can orchestrate resources
+that would be incompatible
+in a single vanilla subagent context,
+because the compiled code provably separates them:
+
+```rust
+// A vanilla subagent CANNOT hold both
+// untrusted_inbox and outbox
+// (World integrity < outbox's requirement).
+//
+// A jev planner subagent CAN receive both
+// as resource handles and generate a plan
+// that reads untrusted emails,
+// extracts Declassifiable values (count, enum),
+// and routes only those to the outbox path.
+// rustc proves the separation.
+```
+
+Compilation is an integrity endorsement mechanism:
+the compiler proves the generated code respects
+information flow constraints.
+No additional user approval is needed
+unless the sub-plan requires a new resource grant
+(beyond what the parent already approved)
+or needs to promote data
+(declassify or endorse beyond automatic rules).
+
+**Deterministic work** needs no subagent.
 Data transforms, filtering, aggregation,
 string manipulation, format conversion.
-No LLM call, no latency, no cost.
-This is work that other orchestrators
-often waste LLM calls on.
-
-**Runtime safety within the capability envelope.**
-The type system constrains
-what a subagent *can* access;
-a summarizer that receives `&Fs`
-can't send email.
-Within that envelope,
-subagent behavior is runtime.
-When a subagent attempts an unauthorized operation
-(outside its granted capabilities),
-it receives an error, not silent failure.
-The subagent's system prompt includes
-guidance for fault recovery,
-so it can adjust its approach
-rather than failing opaquely.
+These compile to native code and run fast.
+Other orchestrators often waste LLM calls
+on straightforward transforms.
 
 ### "Do it" mode
 
@@ -350,23 +402,33 @@ unsafe concurrent access.
 
 ### Resource access model
 
-Resources are concrete typed objects.
-Each type encodes what operations are permitted.
-The borrow checker enforces
-that a task actually holds a resource handle
-before it can use it.
+Resources are concrete typed objects
+carrying three compile-time properties:
+
+1. **Access mode**: `&` (read) vs `&mut` (write),
+   enforced by the borrow checker
+2. **Confidentiality**: who can see data
+   flowing out of this resource
+3. **Integrity**: who has endorsed this data
+   (which principal tier the resource belongs to)
+
+Access mode is orthogonal
+to confidentiality and integrity.
+`&`/`&mut` controls read vs write;
+confidentiality/integrity control
+where data can flow and what it can influence.
 
 **Filesystem uses `&`/`&mut` naturally.**
-Two types: `File` (single file) and `FileTree` (directory).
+Two types: `File` (single file)
+and `FileTree` (directory).
 `&File` / `&FileTree` is read access,
 `&mut File` / `&mut FileTree` is write access.
 The borrow checker prevents concurrent read/write
 conflicts automatically:
 
 ```rust
-fn read_config(cfg: &File) { ... }          // single file, read
-fn summarize(fs: &FileTree) { ... }         // directory, read
-fn write_report(fs: &mut FileTree) { ... }  // directory, write
+fn read_config(cfg: &File) { ... }         // read
+fn write_report(fs: &mut FileTree) { ... }  // write
 ```
 
 **Service resources use capability-typed handles.**
@@ -375,38 +437,36 @@ For services like email, calendar, and web,
 reading and sending email
 are different permissions on the same service,
 not shared vs exclusive access.
-Instead, the type itself carries
-both the capability and the trust level:
+The type itself carries the capability:
 
 ```rust
 fn task(
-    inbox: &TrustedEmailInbox<"luis@x.com", ["alice@y.com"]>,
+    inbox: &EmailInbox<"luis@x.com">,
     outbox: &EmailOutbox<"luis@x.com">,
 ) { ... }
 ```
 
-`TrustedEmailInbox` has no `send` method.
+`EmailInbox` has no `send` method.
 `EmailOutbox` has no `read` method.
 The permission boundary is the type,
 not the reference mode.
-The borrow checker still ensures
-a task holds the handle;
-a function that doesn't receive `EmailOutbox`
-can't send email, period.
+Capability handles for the same service
+can be used concurrently without conflict.
 
-Trust is a property of the resource,
-not just a wrapper on data.
-A `TrustedEmailInbox` returns data directly.
-An `UntrustedEmailInbox` returns `Unverified<T>`.
-A `TrustedWeb` fetch returns usable data.
-An `UntrustedWeb` fetch returns `Unverified<T>`.
-The resource's trust level determines
-the trust level of data flowing out of it.
-
-This means capability handles for the same service
-can be used concurrently without conflict:
-reading email while sending is fine
-because they're separate types.
+**Resource labels determine data labels.**
+A resource's confidentiality and integrity
+flow into the data it produces.
+Data from a high-integrity resource
+(e.g., an inbox filtered to Friend-tier contacts)
+carries `Friend` integrity.
+Data from a low-integrity resource
+(e.g., an unfiltered web fetch)
+carries `World` integrity.
+Data from a private resource carries `Private`
+confidentiality; from a public resource, `Public`.
+The data wrapper `Labeled<T>` (name TBD)
+carries both axes
+and propagates them through all operations.
 
 **Resource construction requires RuntimeKey.**
 Constructors like `File::open` take `&RuntimeKey`.
@@ -445,51 +505,59 @@ network-backed storage is a resource.
 ### Resource scoping
 
 Resources are scoped to specific external entities.
-The scope and trust level are encoded in the type,
-making both compile-time constraints.
+The scope, confidentiality, and integrity
+are encoded in the type,
+making all three compile-time constraints.
 
 **Filesystem**: `File` for single files,
-`FileTree` for directory trees,
-split by trust level (future).
-`TrustedFile<"/data">`: known-good local files,
-data usable directly.
-`UntrustedFile<"/uploads">`: external input,
-operations return `Unverified<T>`.
+`FileTree` for directory trees.
+Integrity determined by source:
+user-owned directories are high-integrity;
+directories containing external input are low.
+Confidentiality determined by content:
+personal files are private;
+shared/public files are public.
 
-**Web**: scoped by domain,
-split by trust level.
-`TrustedWeb<"internal.company.com">`:
-known-good source, data usable directly.
-`UntrustedWeb<"reddit.com">`:
-operations return `Unverified<T>`.
+**Web**: scoped by domain.
+Integrity determined by the domain's
+principal tier in the contact book.
+Most external domains are World-tier.
+Confidentiality is Public
+(web content is world-readable by nature).
 Domain-level scoping balances specificity
 (auditable grants)
 with practicality (URLs are dynamic).
 
-**Email**: scoped by account and filtered by sender.
-`TrustedEmailInbox<"luis@x.com", ["alice@y.com"]>`:
-reads that inbox, filtered to trusted senders,
-data usable directly.
-`UntrustedEmailInbox`: external sources,
-returns `Unverified<T>`.
-`EmailOutbox<"luis@x.com">`: sends from that address;
-recipient must be a `TrustedRecipient`.
-Backed by a contact book
-with per-contact settings and roles,
+**Email**: scoped by account,
+optionally filtered by sender.
+The sender's principal tier
+(from the contact book)
+determines the integrity of data read.
+An inbox filtered to Friend-tier contacts
+produces `Friend`-integrity data.
+An unfiltered inbox produces `World`-integrity data.
+`EmailOutbox`: sends from a given address;
+its `send` method requires data
+meeting a minimum integrity level
+and compatible confidentiality
+(private data cannot be sent
+without explicit declassification).
+The contact book maps contacts to tiers
+and stores per-contact settings and roles,
 enabling template-driven composition
 (e.g., a "colleague" role
 with appropriate tone and signature).
 
 **Sockets**: local paths as IPC endpoints.
-A socket resource is like a scoped `Fs`
-for inter-process communication,
-subject to the same permission grants.
+Subject to the same permission grants
+and labeling as other resources.
 
 These scoping patterns make the permission manifest
 specific and auditable:
 the user sees exactly which domains,
 which email addresses,
-and which filesystem paths the plan touches.
+and which filesystem paths the plan touches,
+along with their integrity tiers.
 
 ### Resource struct propagation
 
@@ -529,52 +597,291 @@ Only access-mode conflicts (read vs write
 on the same resource) require
 the parent to decide ordering.
 
-### Trust model
+### Information flow model
 
-Trust operates at two levels:
+jev's security model maps directly to
+information flow control (IFC),
+the same theoretical framework behind
+[Jif](https://www.cs.cornell.edu/jif/) (Myers & Liskov)
+and [Perl taint mode](https://perldoc.perl.org/perlsec).
+Two orthogonal axes, both enforced at compile time:
 
-**Resource-level trust** determines
-what comes out of a resource.
-`TrustedWeb` reads return data directly.
-`UntrustedWeb` reads return `Unverified<T>`.
-The resource's trust level is set at construction
-based on user configuration
-(which domains, senders, paths are trusted).
+**Confidentiality**: who can see this data.
+Prevents private data from leaking
+to world-visible outputs.
+Lattice: `Private > Public`
+(extensible to domain compartments
+like Personal/Work in the future).
 
-**Data-level trust** wraps values:
-- `Unverified<T>`: data from untrusted resources
-- `Verified<T>`: human-confirmed data
-- `.verify()` triggers real human confirmation
-  (not a no-op cast)
-- Functions requiring trust take `Verified<T>`;
-  passing `Unverified<T>` is a compile error
+**Integrity**: who has endorsed this data.
+Prevents low-integrity data
+(which may contain adversarial content)
+from influencing high-integrity actions.
+Lattice: `Self > Friend > World`
+(extensible to additional tiers).
 
-The two levels connect:
-trusted resources produce usable data,
-untrusted resources produce `Unverified<T>`,
-and sensitive operations (like `EmailOutbox::send`)
-require `TrustedRecipient`,
-verified via the contact book,
-not raw addresses.
+These are orthogonal.
+A trusted friend's email is high-integrity
+(Friend tier) but may be private.
+A public Wikipedia page is low-integrity
+(World tier) but public.
+The axes compose independently.
+
+#### Principals and tiers
+
+Principals are entities with security concerns.
+The system is generic over principals
+but ships with a fixed initial set:
+
+- **Self**: the user. Highest integrity.
+  Data endorsed by Self can do anything.
+- **Friend**: a trusted contact tier.
+  Configured per-contact in the contact book.
+  Can influence medium-sensitivity actions
+  (e.g., calendar) but not high-sensitivity ones
+  (e.g., financial).
+- **World**: unknown/external. Lowest integrity.
+  Cannot directly influence any action.
+
+The contact book maps specific contacts to tiers:
+`Contact<"alice@example.com">` resolves to
+the `Friend` tier at code generation time.
+The specific contact identity appears
+in the permission manifest for auditability;
+the tier is the compile-time type
+that all contacts at that level share.
+
+When contacts are not known statically
+(e.g., iterating over an inbox),
+the resource's configured tier applies.
+An inbox filtered to Friend-tier contacts
+produces Friend-integrity data.
+An unfiltered inbox produces World-integrity data.
+
+Additional tiers (e.g., Inner, Outer)
+can be added by extending the principal set.
+The lattice ordering determines
+which tiers satisfy which requirements.
+
+#### `Labeled<T>` (name TBD)
+
+All data produced by resources
+is wrapped in `Labeled<T, Conf, Integrity>`,
+a monadic type carrying both axes.
+(The current `Unverified<T>` / `Verified<T>`
+will be replaced by this unified wrapper.)
+
+Labeled propagates through all data operations:
+
+```rust
+// Field access preserves labels
+let subject: Labeled<&str> = email.subject();
+
+// Map preserves labels
+let upper: Labeled<String> = subject.map(|s| {
+    s.to_uppercase()
+});
+
+// Combining two values: lattice join.
+// Most restrictive confidentiality,
+// least trustworthy integrity.
+let combined: Labeled<String, Private, World> =
+    Labeled::join(
+        friend_email,   // Private, Friend
+        web_content,    // Public, World
+        |a, b| format!("{}: {}", a, b),
+    );
+```
+
+This means mixing private data with anything
+keeps the result private,
+and mixing low-integrity data with anything
+taints the result.
+Both conservative and correct.
+
+#### Declassification and promotion
+
+Two mechanisms for crossing label boundaries:
+
+**Automatic declassification** via bounded-output types.
+When an operation maps labeled input
+to a type with bounded, known variants,
+the output is clean.
+A `Declassifiable` trait marks safe output types:
+
+```rust
+trait Declassifiable {}
+impl Declassifiable for bool {}
+impl Declassifiable for Sentiment {}
+impl Declassifiable for u32 {}
+// String: NOT Declassifiable
+```
+
+An enum with N variants carries at most
+log2(N) bits from the input.
+Adversarial content can influence
+which variant (misclassification)
+but the variant itself is a known-good value.
+Misclassification is a competence problem,
+not a security escalation.
+
+**Promotion** for open types.
+`.promote::<Target>()` explicitly raises data
+to a target level in either hierarchy.
+This triggers real human confirmation
+(not a no-op cast).
+Promotion can target any tier, not just the top:
+
+```rust
+// Promote World data to Friend integrity
+// after human review.
+// Can now influence calendar, not bank.
+let reviewed = raw_data
+    .promote::<Friend>()  // human confirms
+    .await?;
+
+// Promote all the way to Self
+let self_endorsed = raw_data
+    .promote::<Self>()    // human confirms
+    .await?;
+```
+
+The dual operation on the confidentiality axis:
+declassifying Private data to Public
+(explicitly releasing it for world-visible use).
+This also requires human confirmation.
+
+#### Action boundaries
+
+Action-capable resource methods declare
+their required integrity and confidentiality
+via trait bounds on their inputs.
+This is not a separate "action resource" trait;
+it's simply that `outbox.send()` requires
+data meeting a minimum integrity level
+and compatible confidentiality:
+
+```rust
+impl EmailOutbox {
+    // Send requires Friend+ integrity
+    // and Public confidentiality
+    // (email goes to the world).
+    async fn send<C, I>(
+        &self,
+        draft: Labeled<Draft, C, I>,
+    ) -> Result<()>
+    where
+        I: SatisfiesIntegrity<Friend>,
+        C: SatisfiesConf<Public>,
+    { ... }
+}
+```
+
+Passing `Labeled<Draft, Private, World>` fails both:
+`World` doesn't satisfy `Friend` integrity,
+`Private` doesn't satisfy `Public` confidentiality.
+Passing `Labeled<Draft, Public, Self>` succeeds.
 
 ### Sandboxing
 
-Plans run in a container.
-The container configuration is derived directly
-from the approved permission manifest:
-each granted resource maps to a mount or network rule.
+A sandbox is a capability type,
+not just "plans run in a container."
+It is the universal execution boundary
+for all runtime subagents.
 
-- Filesystem grants → mounted paths (read-only or read-write)
-- Network grants → allowed endpoints
-- No grant → not mounted, not reachable
+**Capability attenuation.**
+A parent task constructs a sandbox
+by mounting a subset of its own resources.
+The sandbox can only contain
+resources the parent holds;
+you cannot grant what you do not have.
+This is the
+[object capability attenuation](https://joeduffyblog.com/2015/11/10/objects-as-secure-capabilities/)
+pattern.
+
+```rust
+fn parent_task(res: &mut Resources) {
+    let sb = Sandbox::builder()
+        .mount(&res.inbox)          // read
+        .mount_mut(&mut res.output) // write
+        // outbox deliberately excluded
+        .shell(true)
+        .build();
+}
+```
+
+**Sandbox labels are derived from mounts.**
+Lattice join across all mounted resources:
+most restrictive confidentiality,
+least trustworthy integrity.
+These labels determine the label
+of everything that comes out of the sandbox.
+
+**Taint-capability check at construction.**
+If the sandbox's derived integrity
+is below what an action resource requires,
+mounting that action resource is a compile error.
+The type system prevents combining
+low-integrity sources with high-integrity actions
+in the same sandbox:
+
+```rust
+// Fine: World integrity, no action resources.
+Sandbox::builder()
+    .mount(&untrusted_web)  // World integrity
+    .mount_mut(&mut scratch) // passive resource
+    .shell(true)
+    .build()
+
+// COMPILE ERROR: World integrity + outbox
+Sandbox::builder()
+    .mount(&untrusted_web)  // World integrity
+    .mount(&outbox)         // requires Friend+
+    .build()
+```
+
+**Shell access** is a grant within the sandbox.
+The subagent can run shell commands,
+but only has access to mounted paths
+and allowed network endpoints.
+The container enforces this at runtime,
+providing a second enforcement layer
+beyond the type system.
+
+**Container enforcement.**
+The sandbox maps to a real container:
+- Filesystem grants become mounted paths
+  (read-only or read-write)
+- Network grants become allowed endpoints
+- No grant means not mounted, not reachable
 
 `std::fs`, `std::net`, `std::process` etc.
 are not useful inside the container
-because nothing is mounted
+because nothing is accessible
 beyond what the grants specify.
 Combined with the RuntimeKey barrier
-(task code can't construct resources),
+(task code cannot construct resources),
 this closes the escape hatch.
+The type system is the primary defense;
+the container is belt to the type system's
+suspenders.
+
+**Sandbox nesting.**
+A subagent within a sandbox can create
+sub-sandboxes and delegate further.
+The same attenuation rule applies:
+each level can only grant
+what it currently holds.
+Capabilities monotonically decrease
+down the delegation chain.
+
+**Output.**
+Subagents write output to mounted storage
+(local filesystem, pipes, or MCP calls),
+not return values.
+This naturally supports multiple outputs
+and streaming.
+All output carries the sandbox's labels.
 
 ### Permission manifest
 
@@ -584,11 +891,11 @@ and is the user-facing audit surface:
 
 ```
 This plan requires:
-  TrustedFile    read   /data/**              (summarize, format)
-  TrustedFile    write  /output/report        (root)
-  UntrustedWeb   fetch  news.ycombinator.com  (scrape)
-  TrustedInbox   read   luis@x.com [alice]    (scan-inbox)
-  EmailOutbox    send   luis@x.com → alice    (notify)
+  File      read   /data/**             priv self   (summarize, format)
+  File      write  /output/report       priv self   (root)
+  Web       fetch  news.ycombinator.com pub  world  (scrape)
+  Inbox     read   luis@x.com [alice]   priv friend (scan-inbox)
+  Outbox    send   luis@x.com           pub  friend (notify)
 ```
 
 Each entry lists the access mode,
@@ -642,37 +949,50 @@ which the orchestrator needs for tree merging.
   as additional narrowing
   (e.g., `senders`, `recipients`).
 
-**Trust in declarations.**
-Trust will be declared per resource
-once trust-level types land (Phase 3).
-The planner needs to know the concrete Rust type
+**Labels in declarations.**
+Confidentiality and integrity
+will be declared per resource
+once the information flow model lands.
+The planner needs to know the concrete labels
 to generate code that compiles;
-a `TrustedFile` read returns data directly,
-while an `UntrustedFile` read returns `Unverified<T>`.
-The orchestrator cannot resolve trust silently
+a Friend-integrity inbox read
+returns `Labeled<Email, Private, Friend>`,
+while a World-integrity web fetch
+returns `Labeled<String, Public, World>`.
+The orchestrator cannot resolve labels silently
 because the LLM must write code
 against the correct type signatures.
 
-Planned declaration format with trust:
+Planned declaration format with labels:
 
 ```toml
 [resources.data]
 url = "file:/data"
 access = "read"
-trust = "trusted"
+confidentiality = "private"
+integrity = "self"
 
-[resources.uploads]
-url = "file:/uploads"
+[resources.inbox]
+url = "mailto:luis@x.com"
 access = "read"
-trust = "untrusted"
+contact = "alice@example.com"
+# integrity resolved from alice's tier
+# in the contact book (e.g., "friend")
+
+[resources.web]
+url = "https://reddit.com"
+access = "read"
+# defaults: confidentiality = public,
+# integrity = world
 ```
 
-The `trust` field maps to concrete Rust types:
-`trusted` + `file:` maps to `TrustedFile`,
-`untrusted` + `file:` maps to `UntrustedFile`.
-Until trust-level types are implemented,
-the `trust` field is not present
-and all resources use the base type (`File`).
+The `contact` field resolves to an integrity tier
+via the contact book.
+Explicit `confidentiality` and `integrity` fields
+override defaults when needed.
+Until the information flow model is implemented,
+these fields are not present
+and all resources use the base types.
 
 **Stash** is not a resource;
 it's a task-local helper, no grant needed.
@@ -711,11 +1031,13 @@ Phases are ordered to maximize feedback
 from real personal-assistant usage.
 The safety foundation (Phase 2) lands first
 so every subsequent resource is safe from day one.
-Resources (Phase 3) come before task trees (Phase 4)
-because without real-world resources
-the system isn't useful,
-and without the safety layer
-it isn't trustworthy.
+The information flow model (Phase 3)
+and real-world resources land together
+because resource types need labels
+and labels need resources to be useful.
+Sandboxing (Phase 4) builds on the label model;
+task trees and jev planner subagents (Phase 5)
+build on sandboxing.
 
 **Phase 1 (done): Core scaffold**
 - Filesystem, text, and trust types in jevs
@@ -745,43 +1067,54 @@ it isn't trustworthy.
 - Qualified imports (no `use jevs::*`)
 - Cargo.toml as embedded template asset
 
-**Phase 3: Real-world resources**
-- Trust-level resource types
-  (`TrustedWeb`/`UntrustedWeb`,
-  `TrustedEmailInbox`/`UntrustedEmailInbox`,
-  `EmailOutbox`, `TrustedFile`/`UntrustedFile`)
-- `trust` field in resource declarations
-  (maps to concrete Rust types;
-  planner must know the type to generate
-  code that compiles against trust constraints)
-- Opinionated web resource
-  (`Web::fetch(url) -> Document`,
-  `Api::get`, `Api::post`)
-- Email resource with contact book integration
-  (per-contact settings, roles for templating;
-  send requires `TrustedRecipient`)
-- Calendar resource (read, create, modify)
+**Phase 3: Information flow model + resources**
+- Two-axis information flow model:
+  confidentiality (Private/Public)
+  and integrity (Self/Friend/World)
+- `Labeled<T, Conf, Integ>` monadic wrapper
+  with lattice join semantics
+- Principal tiers: generic machinery,
+  fixed initial set (Self, Friend, World)
+- Contact book: maps contacts to tiers,
+  stores per-contact settings and roles
+- `Declassifiable` trait
+  for automatic declassification
+  of bounded-output types
+- `.promote::<Tier>()` with human confirmation
+  for open types
+- Confidentiality/integrity fields
+  in resource declarations
+- Real-world resource types:
+  web, email (inbox/outbox), calendar
+- `SatisfiesIntegrity` / `SatisfiesConf`
+  trait bounds on action resource methods
 - jevu: user utility library
   (promote reusable functions from prior plans)
 - Saved plans + rerunning
-  (named plans, `jev run <name>`,
-  parameterized templates)
-- Each new resource is safe from day one
-  via the compilation boundary
 
-**Phase 4: Task trees + orchestration**
+**Phase 4: Sandbox + subagent model**
+- Sandbox as capability type
+  (builder pattern, mount resources,
+  derived labels, taint-capability check)
+- Vanilla subagents
+  (LLM in sandbox, shell access as grant,
+  model selection)
+- Container enforcement
+  (sandbox maps to real container config)
+- Sandbox nesting
+  (recursive delegation,
+  monotonic capability attenuation)
+- Output via mounted storage
+
+**Phase 5: Task trees + jev planner subagents**
 - Expand-down / resolve-up planning loop
 - Per-node resource structs with propagation
 - Parallel leaf implementation
 - Mechanical resource hoisting for shared access
-- Typed/structured subagent interfaces
-- Model selection per subagent
-
-**Phase 5: Sandboxing + hardening**
-- Containerized plan execution
-- Container config derived from permission manifest
-- Conditional access annotations
-- Trust type `.verify()` as real human confirmation
+- Jev planner subagents
+  (nested planning loop, compilation as
+  integrity endorsement, approval only
+  for new grants or data promotion)
 - "Do it" mode
   (opt-in fast path, audit-logged,
   no compilation)

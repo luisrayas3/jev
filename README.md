@@ -6,25 +6,10 @@ Agent orchestration where the planner outputs Rust code.
 ## Project structure
 
 ```
-jevs/                 -- library crate (typed resource APIs)
-├── src/
-│   ├── lib.rs          -- module declarations
-│   ├── api.rs          -- per-module doc aggregator
-│   ├── file.rs         -- filesystem resource
-│   ├── stash.rs        -- plan-local blob storage
-│   ├── text.rs         -- pure text operations
-│   ├── trust.rs        -- trust-level types
-│   └── runtime.rs      -- RuntimeKey (init-once barrier)
-jev/                    -- CLI binary
-├── src/
-│   └── main.rs         -- plan / run / go commands
-├── assets/
-│   ├── main.tmpl.rs    -- fixed shim written into plans
-│   └── Cargo.tmpl.toml -- plan Cargo.toml template
-plans/                  -- generated programs land here
-tests/
-├── e2e.fish            -- full pipeline test (fish)
-└── fixtures/e2e/       -- test assets
+jevs/    -- library crate (typed resource APIs)
+jev/     -- CLI binary
+plans/   -- generated programs (gitignored targets)
+tests/   -- e2e pipeline test (fish)
 ```
 
 ## Quick start
@@ -34,30 +19,29 @@ tests/
 - [Rust](https://rustup.rs/) (stable toolchain)
 - [just](https://github.com/casey/just) (command runner)
 - [fish](https://fishshell.com/) (for e2e tests)
-- `.env` file with `ANTHROPIC_API_KEY=...` (for e2e / LLM)
-
-### Setup
-
-```bash
-cargo build
-```
+- `.env` file with `ANTHROPIC_API_KEY=...` (for LLM calls)
 
 ## Development
 
 ```bash
-# Generate a plan from a task description
-cargo run --bin jev -- plan 'count lines in all .rs files'
-
-# Build and run the most recent plan
-cargo run --bin jev -- run
+# Build
+just sync
 
 # Plan, confirm, and run in one shot
-cargo run --bin jev -- go 'list all files in current directory'
+just jev-go 'list all files in current directory'
 
-# Run tests
+# Or step by step:
+cargo run --bin jev -- plan 'count lines in all .rs files'
+cargo run --bin jev -- run
+
+# Tests
+just test         # unit + e2e
 just test-unit    # unit tests only
 just test-e2e     # full LLM pipeline (needs .env)
-just test         # both
+
+# Cleanup
+just clean        # cargo clean + plan build artifacts
+just clean-all    # clean + remove all plans and logs
 ```
 
 ## Code style

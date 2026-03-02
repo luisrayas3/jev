@@ -19,7 +19,8 @@ Target users are developers building AI agent workflows.
 The core insight is that `rustc` is the safety checker:
 type errors = invalid plan,
 the borrow checker enforces grant safety,
-and trust levels are types.
+and information flow (confidentiality, integrity)
+is encoded in the type system.
 No custom IR, no interpreter; Rust is the whole story.
 
 Key architectural decisions:
@@ -268,13 +269,29 @@ with decisions and changes from this session
 - Unit tests (30) + e2e test (fish, full pipeline)
 
 **What's NOT implemented yet**:
+- Two-axis information flow model:
+  confidentiality (Private/Public) +
+  integrity (Self/Friend/World)
+- `Labeled<T>` monadic wrapper (replaces
+  current `Unverified<T>` / `Verified<T>`)
+- Principal tiers with contact book
+  (contacts map to integrity tiers)
+- `Declassifiable` trait
+  (automatic declassification for bounded types)
+- `.promote()` with human confirmation
+  (generalized `.verify()`, targets any tier)
+- Sandbox as capability type
+  (mounts, derived labels, shell access,
+  taint-capability check at construction)
+- Vanilla subagents (LLM in sandbox)
+- Jev planner subagents
+  (nested planning loop,
+  compilation as integrity endorsement)
+- Additional resource types
+  (email, calendar, knowledge base, HTTP)
 - Task tree decomposition
   (expand down / resolve up planning loop)
 - Containerized execution
-- Additional resource types
-  (email, calendar, knowledge base, HTTP)
-- Subagent call interface
-- Trust type `.verify()` as real human confirmation
 - jevu user utility library
   (reusable functions from prior plans)
 - "Do it" mode (opt-in fast path)

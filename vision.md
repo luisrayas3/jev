@@ -36,13 +36,18 @@ You approve the permissions,
 and the compiler guarantees
 the plan can't exceed them.
 
-Resource constructors require a RuntimeKey,
-initialized once at startup with a random value.
+Resource types encode two security properties
+from information flow control:
+*confidentiality* (private data stays private)
+and *integrity*
+(untrusted content cannot influence actions).
+The compiler enforces both
+before anything runs.
 Task code receives resources as function parameters
-and cannot construct new ones;
-it has no access to the key.
-The plan runs in a container
-where only approved resources are mounted.
+and cannot construct new ones.
+The plan runs in a sandbox
+where only approved resources are mounted,
+providing a second enforcement layer at runtime.
 
 Deterministic work (filtering, transforming,
 aggregating) runs as compiled native code.
@@ -116,10 +121,11 @@ that runtime-checked frameworks cannot match.
 
 ## Threat model
 
-jev's safety story addresses four distinct threats,
-in priority order.
+jev's safety story addresses five distinct threats.
+The first two map to the two axes
+of information flow control.
 
-### 1. Prompt injection
+### 1. Prompt injection (integrity)
 
 The primary threat.
 Untrusted content (emails, web pages, documents)
@@ -127,23 +133,55 @@ can contain adversarial instructions
 that hijack the LLM into unauthorized actions.
 
 jev's defense is structural:
-the compiler enforces resource boundaries
-*before* any untrusted content is seen.
-A task that reads email cannot send email,
-not because the LLM follows instructions,
-but because `&EmailInbox` has no `send` method.
+the *integrity* axis of the type system
+prevents low-integrity data
+from flowing into high-integrity actions.
+A subagent that sees untrusted emails
+cannot also hold an outbox handle;
+the compiler rejects the combination.
 Injected instructions can corrupt reasoning
-but cannot escalate access.
+within the subagent's sandbox
+but cannot escalate to actions
+the subagent was not granted.
+
+For jev planner subagents
+(nested planning loops at runtime),
+the defense is stronger:
+the planner generates code,
+and `rustc` proves the generated code
+respects information flow constraints.
+Compilation is an integrity endorsement
+mechanism; the planner can wire together
+resources that would be unsafe
+in a single LLM context
+because the compiled plan provably separates them.
 
 The attack surface is the planning phase,
-where the LLM has full capability.
+where the LLM has broad capability.
 The defense there is the permission manifest:
 the user reviews a flat list of grants
 before anything executes.
 An injection that inflates permissions
 is visible in the manifest.
 
-### 2. LLM incompetence
+### 2. Data leakage (confidentiality)
+
+Private data flowing to unintended recipients.
+A plan that reads personal calendar entries
+should not embed them in a work email.
+
+jev's defense is the *confidentiality* axis:
+private data carries a `Private` label
+that propagates through all operations.
+Action resources that produce world-visible output
+(email outbox, public API calls)
+require `Public`-labeled input.
+Passing `Private` data is a compile error.
+Explicit declassification
+(with human confirmation)
+is required to release private data.
+
+### 3. LLM incompetence
 
 The most common failure mode.
 The model generates bad plans:
@@ -164,6 +202,17 @@ jev addresses this at multiple layers:
   to model capability,
   reducing error rates on simple work
 
+Integrity labels also help
+beyond adversarial contexts:
+high-integrity sources
+(curated documentation, verified databases)
+produce data the system treats
+with higher confidence than
+low-integrity sources
+(arbitrary web content, unverified input).
+The type system makes source quality
+explicit and trackable.
+
 What jev does *not* do:
 verify that correct logic was applied
 within a valid plan.
@@ -172,23 +221,25 @@ but has valid types will compile and run.
 Auditability (readable plans, logged execution)
 is the mitigation, not prevention.
 
-### 3. Privacy
+### 4. Privacy and third-party exposure
 
 User data flows through LLM calls.
 jev constrains *which* data reaches *which* call
-via resource scoping:
+via resource scoping and confidentiality labels:
 a subtask only sees the resources
-passed to it as parameters.
+passed to it, and private data
+cannot flow to world-visible outputs
+without explicit declassification.
 
 This limits exposure surface
-but does not solve the underlying problem:
+but does not fully solve the problem:
 data sent to an LLM provider
 is data sent to a third party.
 Local model support, data classification,
 and provider trust policies
 are future concerns, not current guarantees.
 
-### 4. Other adversarial threats
+### 5. Other adversarial threats
 
 Supply chain attacks on dependencies,
 container escapes, compromised model providers,
@@ -198,7 +249,7 @@ jev's contribution here is minimal today.
 Container isolation and dependency auditing
 are standard infrastructure concerns,
 not novel to this architecture.
-The compilation boundary does limit
+The sandbox boundary does limit
 what a compromised subtask can reach,
 but this is a side effect of the design,
 not a primary defense.
