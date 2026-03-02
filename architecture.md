@@ -668,7 +668,7 @@ which tiers satisfy which requirements.
 All data produced by resources
 is wrapped in `Labeled<T, Conf, Integrity>`,
 a monadic type carrying both axes.
-(The current `Unverified<T>` / `Verified<T>`
+(The current `Tainted<T>` / `Endorsed<T>`
 will be replaced by this unified wrapper.)
 
 Labeled propagates through all data operations:
@@ -1040,7 +1040,7 @@ task trees and jev planner subagents (Phase 5)
 build on sandboxing.
 
 **Phase 1 (done): Core scaffold**
-- Filesystem, text, and trust types in jevs
+- Filesystem, text, and label types in jevs
 - CLI with plan/run/go commands
 - Single-shot planning with compile-error retry
 - Single `main.rs` per plan (flat, no task tree)

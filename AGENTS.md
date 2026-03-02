@@ -236,7 +236,7 @@ with decisions and changes from this session
 (see architecture.md for phased roadmap)
 
 **What's implemented**:
-- `jevs` library: `file`, `stash`, `text`, `trust`,
+- `jevs` library: `file`, `stash`, `text`, `label`,
   `runtime` modules with per-module API docs
 - `jevs::file::File` (single file) and
   `jevs::file::FileTree` (directory tree);
@@ -273,7 +273,7 @@ with decisions and changes from this session
   confidentiality (Private/Public) +
   integrity (Self/Friend/World)
 - `Labeled<T>` monadic wrapper (replaces
-  current `Unverified<T>` / `Verified<T>`)
+  current `Tainted<T>` / `Endorsed<T>`)
 - Principal tiers with contact book
   (contacts map to integrity tiers)
 - `Declassifiable` trait

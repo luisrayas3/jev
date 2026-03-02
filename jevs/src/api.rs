@@ -1,4 +1,4 @@
-use crate::{file, stash, text, trust};
+use crate::{file, label, stash, text};
 
 pub fn catalog() -> String {
     [
@@ -7,7 +7,7 @@ pub fn catalog() -> String {
         file::TREE_API_DOCS,
         stash::API_DOCS,
         text::API_DOCS,
-        trust::API_DOCS,
+        label::API_DOCS,
     ]
     .join("\n")
 }

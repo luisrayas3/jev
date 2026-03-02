@@ -260,7 +260,7 @@ Output ONLY these two blocks: no explanation, no commentary.
 
 Rules for the ```rust``` block:
 - Start with `use crate::resources::Resources;` and any needed qualified imports (e.g. `use jevs::text::line_count;`).
-- Do NOT use `use jevs::*;` - use qualified paths like `jevs::file::File`, `jevs::file::FileTree`, `jevs::text::line_count`, `jevs::trust::Unverified`.
+- Do NOT use `use jevs::*;` - use qualified paths like `jevs::file::File`, `jevs::file::FileTree`, `jevs::text::line_count`, `jevs::label::Tainted`.
 - Implement `pub async fn root(res: &mut Resources) -> anyhow::Result<()>`
 - Access resources through fields on `res` (e.g. `res.fs`). The field names match the resource names you declare in TOML.
 - For temporary storage, create a stash: `let stash = jevs::stash::Stash::new()?;`
