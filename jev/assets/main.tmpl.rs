@@ -5,6 +5,7 @@ use std::hash::{BuildHasher, Hasher};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    jevs::gate::init()?;
     let key = jevs::runtime::RuntimeKey::init(
         std::hash::RandomState::new()
             .build_hasher()

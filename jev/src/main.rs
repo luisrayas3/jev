@@ -364,7 +364,7 @@ Rules for the ```rust``` block:
 - `write()` takes `Labeled<String>`. Labels must be compatible with the resource (same or less restrictive).
 - `glob()` returns `Vec<String>` (unlabeled paths).
 - Create local data with `jevs::label::Labeled::local("text".to_string())`.
-- Cross label boundaries: `.declassify().await?` (Private→Public), `.accredit::<Tier>().await?` (increase integrity).
+- Cross label boundaries: `jevs::declassify!(expr).await?` (Private→Public), `jevs::accredit!(expr, Tier).await?` (increase integrity).
 - `read()` and `glob()` take `&self` (shared read access).
 - `write()` takes `&mut self` (exclusive write access).
 - Use `tokio::join!` for parallel reads.

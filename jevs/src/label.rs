@@ -25,8 +25,8 @@ let fresh = jevs::label::Labeled::local("hello".to_string());
 let combined = a.join(b, |x, y| format!("{x} {y}"));
 
 // Cross label boundaries (human confirmation, async)
-let public = private_data.declassify().await?;
-let trusted = untrusted.accredit::<jevs::label::Friend>().await?;
+let public = jevs::declassify!(private_data).await?;
+let trusted = jevs::accredit!(untrusted, jevs::label::Friend).await?;
 ```
 
 Labels are checked at compile time.
@@ -40,9 +40,15 @@ pub struct Public;
 pub struct Private;
 
 /// Marker trait for classification levels.
-pub trait Classification {}
-impl Classification for Public {}
-impl Classification for Private {}
+pub trait Classification {
+    fn name() -> &'static str;
+}
+impl Classification for Public {
+    fn name() -> &'static str { "Public" }
+}
+impl Classification for Private {
+    fn name() -> &'static str { "Private" }
+}
 
 // -- Integrity levels ------------------------------------------------------
 
@@ -51,10 +57,18 @@ pub struct Friend;
 pub struct World;
 
 /// Marker trait for integrity levels.
-pub trait Integrity {}
-impl Integrity for Me {}
-impl Integrity for Friend {}
-impl Integrity for World {}
+pub trait Integrity {
+    fn name() -> &'static str;
+}
+impl Integrity for Me {
+    fn name() -> &'static str { "Me" }
+}
+impl Integrity for Friend {
+    fn name() -> &'static str { "Friend" }
+}
+impl Integrity for World {
+    fn name() -> &'static str { "World" }
+}
 
 // -- Lattice join: classification --------------------------------------------
 // Most restrictive wins (max in lattice: Private > Public).
@@ -167,6 +181,26 @@ impl<T, C: Classification, I: Integrity> Labeled<T, C, I> {
         // TODO: human confirmation gate
         Ok(Labeled::new(self.value))
     }
+
+    /// Declassify with gate check.
+    /// Use via `jevs::declassify!` macro.
+    pub async fn declassify_gated(
+        self,
+        info: &crate::gate::CrossingInfo,
+    ) -> anyhow::Result<Labeled<T, Public, I>> {
+        crate::gate::check(info)?;
+        Ok(Labeled::new(self.value))
+    }
+
+    /// Accredit with gate check.
+    /// Use via `jevs::accredit!` macro.
+    pub async fn accredit_gated<Target: Integrity>(
+        self,
+        info: &crate::gate::CrossingInfo,
+    ) -> anyhow::Result<Labeled<T, C, Target>> {
+        crate::gate::check(info)?;
+        Ok(Labeled::new(self.value))
+    }
 }
 
 /// Create data with maximum trust:
@@ -200,6 +234,33 @@ impl Declassifiable for i32 {}
 impl Declassifiable for i64 {}
 impl Declassifiable for f32 {}
 impl Declassifiable for f64 {}
+
+// -- Gated crossing macros ---------------------------------------------------
+
+#[macro_export]
+macro_rules! declassify {
+    ($expr:expr) => {{
+        #[::linkme::distributed_slice(::jevs::gate::CROSSINGS)]
+        static CROSSING: $crate::gate::CrossingInfo =
+            $crate::gate::CrossingInfo::new(
+                file!(), line!(), "declassify", "",
+            );
+        $expr.declassify_gated(&CROSSING)
+    }};
+}
+
+#[macro_export]
+macro_rules! accredit {
+    ($expr:expr, $tier:ty) => {{
+        #[::linkme::distributed_slice(::jevs::gate::CROSSINGS)]
+        static CROSSING: $crate::gate::CrossingInfo =
+            $crate::gate::CrossingInfo::new(
+                file!(), line!(), "accredit",
+                stringify!($tier),
+            );
+        $expr.accredit_gated::<$tier>(&CROSSING)
+    }};
+}
 
 // -- Manual trait impls (avoid bounds on phantom types) -----------------------
 
@@ -274,6 +335,55 @@ mod tests {
         let data: Labeled<&str, Public, World> = Labeled::new("untrusted");
         let trusted: Labeled<&str, Public, Friend> =
             data.accredit::<Friend>().await.unwrap();
+        assert_eq!(*trusted.inner(), "untrusted");
+    }
+
+    #[test]
+    fn classification_name() {
+        assert_eq!(Public::name(), "Public");
+        assert_eq!(Private::name(), "Private");
+    }
+
+    #[test]
+    fn integrity_name() {
+        assert_eq!(Me::name(), "Me");
+        assert_eq!(Friend::name(), "Friend");
+        assert_eq!(World::name(), "World");
+    }
+
+    #[tokio::test]
+    async fn declassify_gated_with_allow() {
+        let info = crate::gate::CrossingInfo::new(
+            "test", 1, "declassify", "",
+        );
+        info.set_policy(crate::gate::Policy::Allow);
+        let data: Labeled<&str, Private, Me> = Labeled::new("secret");
+        let public = data.declassify_gated(&info).await.unwrap();
+        assert_eq!(*public.inner(), "secret");
+    }
+
+    #[tokio::test]
+    async fn declassify_gated_with_prompt_approved() {
+        let info = crate::gate::CrossingInfo::new(
+            "test", 1, "declassify", "",
+        );
+        info.set_policy(crate::gate::Policy::Prompt);
+        crate::gate::inject_response(true);
+        let data: Labeled<&str, Private, Me> = Labeled::new("secret");
+        let public = data.declassify_gated(&info).await.unwrap();
+        assert_eq!(*public.inner(), "secret");
+    }
+
+    #[tokio::test]
+    async fn accredit_gated_with_allow() {
+        let info = crate::gate::CrossingInfo::new(
+            "test", 1, "accredit", "Friend",
+        );
+        info.set_policy(crate::gate::Policy::Allow);
+        let data: Labeled<&str, Public, World> =
+            Labeled::new("untrusted");
+        let trusted: Labeled<&str, Public, Friend> =
+            data.accredit_gated::<Friend>(&info).await.unwrap();
         assert_eq!(*trusted.inner(), "untrusted");
     }
 }

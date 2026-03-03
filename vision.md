@@ -297,7 +297,8 @@ and taking high-stakes actions.
 `World` integrity (untrusted sender).
 The bank's `send` method requires `Me` integrity.
 The compiler rejects the plan
-unless it includes `.accredit::<Me>()`,
-which pauses for your confirmation.
+unless it includes `jevs::accredit!(data, jevs::label::Me)`,
+which registers the crossing
+and pauses for your confirmation at startup.
 The stranger's request
 never reaches your bank unsupervised.

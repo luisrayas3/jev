@@ -237,14 +237,27 @@ with decisions and changes from this session
 
 **What's implemented**:
 - `jevs` library: `file`, `stash`, `text`, `label`,
-  `runtime` modules with per-module API docs
+  `gate`, `runtime` modules with per-module API docs
 - `jevs::label::Labeled<T, C, I>`:
   two-axis IFC wrapper carrying confidentiality
   (Private/Public) and integrity (Me/Friend/World);
   `map`, `join` (lattice join), `inner`, `into_inner`,
-  `declassify` (Private→Public, async),
-  `accredit::<Target>` (increase integrity, async),
   `Labeled::local(value)` (Public, Me)
+- `jevs::declassify!` / `jevs::accredit!` macros:
+  each call site registers a `CrossingInfo` static
+  via `linkme` distributed slice;
+  `gate::init()` iterates all crossings at startup,
+  collects per-crossing decisions (allow/prompt/reject);
+  empty slice = auto-approve (no crossings, runs immediately)
+- `declassify_gated` / `accredit_gated` methods
+  on `Labeled`, called by the macros;
+  direct `.declassify()` / `.accredit()` remain as stubs
+  (existing tests unchanged)
+- `jevs::gate` module: `CrossingInfo`, `Policy`,
+  `Decision`, `init()`, `check()`,
+  test injection (`inject_decision`, `inject_response`)
+- `Classification` and `Integrity` traits
+  with `name() -> &'static str`
 - `Declassifiable` trait for bounded-output types
 - `SatisfiesClassification` / `SatisfiesIntegrity` trait bounds
 - `jevs::file::File<C, I>` and
@@ -271,13 +284,19 @@ with decisions and changes from this session
 - Plan structure: `main.rs` (embedded asset) +
   `resources.rs` (auto-generated from decls) +
   `tasks.rs` (LLM)
+- Plan `main.rs` calls `jevs::gate::init()?`
+  before `RuntimeKey::init`
+- Plan `Cargo.toml` includes `linkme` dependency
+  (macros reference `::linkme::` in plan crate)
 - Compile error feedback loop
   (retry with error context, up to 4 attempts)
-- Unit tests (36) + e2e test (fish, full pipeline)
+- Unit tests (46) + e2e test (fish, full pipeline)
 
 **What's NOT implemented yet**:
-- Human confirmation gate for `declassify`/`accredit`
-  (currently async stubs returning Ok)
+- Human confirmation for `declassify`/`accredit`
+  is wired but the runtime prompt gate
+  (`Policy::Prompt` path) is interactive stdin only;
+  no TUI or structured approval UX yet
 - Principal tiers with contact book
   (contacts map to integrity tiers)
 - Sandbox as capability type
@@ -294,5 +313,3 @@ with decisions and changes from this session
 - Containerized execution
 - jevu user utility library
   (reusable functions from prior plans)
-- Auto-approve for label-safe plans
-  (no declassifications or accreditations)

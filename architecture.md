@@ -314,16 +314,28 @@ on straightforward transforms.
 
 ### Auto-approve
 
-A compiled plan with no `.declassify()` calls
-and no `.accredit()` calls
-is safe by construction: the type system proved
+Each `jevs::declassify!` or `jevs::accredit!` call
+registers a `CrossingInfo` static
+in a `linkme` distributed slice.
+At plan startup, `gate::init()` iterates
+all registered crossings.
+
+A compiled plan with no crossings
+(empty distributed slice)
+is safe by construction:
+the type system proved
 no untrusted data reaches action boundaries
 and no private data leaks to public outputs.
-These plans auto-approve and run immediately.
+`gate::init()` returns immediately
+and the plan runs without prompts.
 
-Plans with declassifications or accreditations
-require human confirmation
-of the specific boundary crossings.
+Plans with crossings show each at startup.
+The user decides per crossing:
+allow (pass silently at runtime),
+prompt (ask again when reached), or reject.
+The binary is self-describing;
+the orchestrator does not need to know
+about crossings.
 
 ### Components
 
@@ -732,21 +744,15 @@ Requires human confirmation for non-Declassifiable types.
 
 ```rust
 // Declassify private data for public use
-let public_data = private_data
-    .declassify()  // human confirms
-    .await?;
+let public_data = jevs::declassify!(private_data).await?;
 
 // Accredit World data to Friend integrity
 // after human review.
 // Can now influence calendar, not bank.
-let reviewed = raw_data
-    .accredit::<Friend>()  // human confirms
-    .await?;
+let reviewed = jevs::accredit!(raw_data, jevs::label::Friend).await?;
 
 // Accredit all the way to Me
-let endorsed = raw_data
-    .accredit::<Me>()      // human confirms
-    .await?;
+let endorsed = jevs::accredit!(raw_data, jevs::label::Me).await?;
 ```
 
 #### Action boundaries
@@ -1005,9 +1011,10 @@ plans/<id>/
 ```
 
 `main.rs` is a fixed embedded asset, not LLM-generated.
-It initializes a random RuntimeKey,
+It calls `jevs::gate::init()?` to handle crossings,
+then initializes a random RuntimeKey,
 calls `resources::create(&key)`,
-then passes the result to `tasks::root()`.
+and passes the result to `tasks::root()`.
 This is the same for every plan.
 
 `resources.rs` is auto-generated
@@ -1068,16 +1075,19 @@ build on sandboxing.
 - `Declassifiable` trait
   for automatic declassification
   of bounded-output types **(done)**
-- `.declassify()` / `.accredit::<Tier>()`
-  for label boundary crossings **(done, stub gate)**
+- `jevs::declassify!` / `jevs::accredit!` macros
+  with `linkme` distributed slice registration
+  and per-crossing gate decisions **(done)**
 - `SatisfiesClassification` / `SatisfiesIntegrity`
   trait bounds on resource methods **(done)**
 - Confidentiality/integrity fields
   in resource declarations **(done)**
 - `File<C, I>` / `FileTree<C, I>`
   with labeled read/write **(done)**
-- Human confirmation gate
-  for `declassify`/`accredit`
+- Human confirmation gate via `jevs::gate` module:
+  `init()` collects decisions at startup,
+  `check()` enforces at runtime,
+  auto-approve when no crossings **(done)**
 - Principal tiers: generic machinery,
   fixed initial set (Me, Friend, World)
 - Contact book: maps contacts to tiers,

@@ -7,5 +7,6 @@ edition = "2021"
 
 [dependencies]
 jevs = { path = "{jevs_path}" }
+linkme = "0.3"
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
