@@ -223,6 +223,9 @@ with decisions and changes from this session
 - Constructor APIs (`File::open`, `FileTree::open`,
   `RuntimeKey::init`) are deliberately undocumented
   in the planner prompt; tasks should never call them
+- `jevs-macros` is a separate proc macro crate;
+  `jevs` re-exports `jevs_macros::needs`
+  so plans use `#[jevs::needs(...)]`
 - Plan assets live in `jev/assets/`:
   `main.tmpl.rs` (fixed shim),
   `Cargo.tmpl.toml` (template with
@@ -237,7 +240,17 @@ with decisions and changes from this session
 
 **What's implemented**:
 - `jevs` library: `file`, `stash`, `text`, `label`,
-  `gate`, `runtime` modules with per-module API docs
+  `gate`, `manifest`, `runtime` modules
+  with per-module API docs
+- `jevs-macros` proc macro crate:
+  `#[jevs::needs(...)]` attribute macro
+  generates `Needs` struct, `create()` function,
+  and `linkme` distributed slice registrations
+- `jevs` re-exports: `jevs::File`, `jevs::FileTree`,
+  `jevs::Labeled`, `jevs::RuntimeKey`, `jevs::needs`
+- `jevs::manifest` module: `Need` struct,
+  `NEEDS` distributed slice, `init()` prompt;
+  same pattern as `gate::init()`
 - `jevs::label::Labeled<T, C, I>`:
   two-axis IFC wrapper carrying confidentiality
   (Private/Public) and integrity (Me/Friend/World);
@@ -266,31 +279,22 @@ with decisions and changes from this session
   `read()` returns `Labeled<String, C, I>`;
   `write()` requires compatible labels
   via `SatisfiesClassification` + `SatisfiesIntegrity` bounds;
-  trailing `/` in URL distinguishes them
+  trailing `/` in path distinguishes them
 - `jevs::api::catalog()` aggregates module docs
 - `jev` CLI with `plan`, `run`, and `go` subcommands
 - LLM integration via Anthropic API
-- LLM outputs two fenced blocks:
-  ```rust``` (tasks.rs) + ```toml``` (resource decls)
-- Resource declarations: TOML with URL + access +
-  optional confidentiality/integrity labels
-  (defaults: private/me);
-  auto-generates `resources.rs`
-  (struct with label type params + `create(&key)`)
-- URL-based resource identification
-  (`file:./` = directory, `file:./foo` = file)
+- LLM outputs single ```rust``` block
+  with `#[jevs::needs(...)]` declarations
 - RuntimeKey barrier
-- Permission manifest with labels
 - Plan structure: `main.rs` (embedded asset) +
-  `resources.rs` (auto-generated from decls) +
-  `tasks.rs` (LLM)
-- Plan `main.rs` calls `jevs::gate::init()?`
-  before `RuntimeKey::init`
+  `tasks.rs` (LLM with `#[jevs::needs]`)
+- Plan `main.rs` calls `manifest::init()` then
+  `gate::init()` before `RuntimeKey::init`
 - Plan `Cargo.toml` includes `linkme` dependency
   (macros reference `::linkme::` in plan crate)
 - Compile error feedback loop
   (retry with error context, up to 4 attempts)
-- Unit tests (46) + e2e test (fish, full pipeline)
+- Unit tests (36) + e2e test (fish, full pipeline)
 
 **What's NOT implemented yet**:
 - Human confirmation for `declassify`/`accredit`

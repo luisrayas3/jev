@@ -6,10 +6,11 @@ Agent orchestration where the planner outputs Rust code.
 ## Project structure
 
 ```
-jevs/    -- library crate (typed resource APIs)
-jev/     -- CLI binary
-plans/   -- generated programs (gitignored targets)
-tests/   -- e2e pipeline test (fish)
+jevs/         -- library crate (typed resource APIs)
+jevs-macros/  -- proc macro crate (#[jevs::needs])
+jev/          -- CLI binary
+plans/        -- generated programs (gitignored targets)
+tests/        -- e2e pipeline test (fish)
 ```
 
 ## Quick start

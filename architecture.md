@@ -136,8 +136,7 @@ PHASE 3: RESOLVE UP (mostly mechanical)
     v
 PHASE 4: COMPILE + VERIFY
     |
-    |  resources.rs: root resource declarations
-    |  tasks.rs: all task code (no constructor access)
+    |  tasks.rs: all task code with #[jevs::needs]
     |  main.rs: fixed shim (orchestrator-generated)
     |  cargo build (rustc validates safety)
     |      |
@@ -909,95 +908,64 @@ Label crossings present = user confirms each.
 
 ### Resource declarations
 
-The LLM outputs two fenced blocks:
-tasks.rs code (```rust```)
-and resource declarations (```toml```).
-The orchestrator parses both,
-generates `resources.rs` from the declarations,
-and compiles the plan.
+The LLM outputs a single ```rust``` block.
+Resources are declared inline
+via the `#[jevs::needs(...)]` attribute macro:
 
-**Declaration format:**
+```rust
+use jevs::{File, FileTree, Labeled};
+use jevs::label::*;
 
-```toml
-[resources.fs]
-url = "file:./"
-access = "readwrite"
-
-[resources.config]
-url = "file:./config.toml"
-access = "read"
+#[jevs::needs(
+    fs: FileTree<Private, Me> = "./",
+    config: File<Private, Me> = "./config.toml",
+)]
+pub async fn root(
+    needs: &mut Needs,
+) -> anyhow::Result<()> {
+    let cfg = needs.config.read().await?;
+    // ...
+    Ok(())
+}
 ```
 
-**URL as universal resource identifier.**
-A single `url` field across all resource kinds.
-The scheme determines the kind:
-`file:` maps to `File` or `FileTree`
-(trailing `/` = directory),
-`https:` maps to `Web` (future),
-`mailto:` maps to `Email` (future),
-`calendar:` maps to `Calendar` (future).
-URL + access gives natural uniqueness,
-which the orchestrator needs for tree merging.
+The macro generates a `Needs` struct,
+a `create(&RuntimeKey)` function,
+and `linkme` distributed slice entries
+for the permission manifest.
+The orchestrator does not parse declarations;
+the compiled binary is self-describing.
 
-**Field semantics:**
-- `[resources.<name>]`: name = struct field name,
-  what the LLM uses as `res.<name>` in tasks.rs.
-- `access`: `read`, `write`, or `readwrite`.
-  For `mailto:`, access also distinguishes
-  inbox (read) from outbox (write).
-- Type-specific filters (future) sit alongside URL
-  as additional narrowing
-  (e.g., `senders`, `recipients`).
+**Path conventions.**
+Trailing `/` distinguishes directories from files:
+`"./data/"` = `FileTree`, `"./data.txt"` = `File`.
+Future resource kinds will use URL schemes:
+`https:` for web, `mailto:` for email, etc.
 
 **Labels in declarations.**
-Confidentiality and integrity
-are declared per resource.
-The planner needs the concrete labels
-to generate code that compiles;
-a Friend-integrity inbox read
-returns `Labeled<Email, Private, Friend>`,
-while a World-integrity web fetch
-returns `Labeled<String, Public, World>`.
-The orchestrator cannot resolve labels silently
-because the LLM must write code
-against the correct type signatures.
+Classification and integrity
+are type parameters on the resource type.
+The planner chooses labels
+to match the data's origin and trust level:
 
-Declaration format with labels:
-
-```toml
-[resources.data]
-url = "file:/data"
-access = "read"
-confidentiality = "private"
-integrity = "me"
-
-[resources.inbox]
-url = "mailto:luis@x.com"
-access = "read"
-contact = "alice@example.com"
-# integrity resolved from alice's tier
-# in the contact book (e.g., "friend")
-
-[resources.web]
-url = "https://reddit.com"
-access = "read"
-# defaults: confidentiality = public,
-# integrity = world
+```rust
+#[jevs::needs(
+    data: File<Private, Me> = "/data",
+    web: File<Public, World> = "/cache/page.html",
+)]
 ```
 
-The `contact` field resolves to an integrity tier
-via the contact book.
-Explicit `confidentiality` and `integrity` fields
-override defaults when needed.
-Defaults for file resources:
-`private` confidentiality, `me` integrity.
+Defaults when not specified:
+`Private` classification, `Me` integrity.
 
 **Stash** is not a resource;
 it's a task-local helper, no grant needed.
 
-**Order**: the LLM outputs tasks first,
-resources second.
-The parser expects ```rust``` then ```toml```.
+**Re-exports.**
+`jevs` re-exports common types at the crate root:
+`jevs::File`, `jevs::FileTree`,
+`jevs::Labeled`, `jevs::RuntimeKey`.
+Labels stay under `jevs::label::*`.
 
 ### Plan project structure
 
@@ -1005,24 +973,24 @@ The parser expects ```rust``` then ```toml```.
 plans/<id>/
 ├── Cargo.toml
 └── src/
-    ├── main.rs        -- fixed shim (embedded asset)
-    ├── resources.rs   -- generated from declarations
-    └── tasks.rs       -- task implementations (LLM-generated)
+    ├── main.rs    -- fixed shim (embedded asset)
+    └── tasks.rs   -- LLM-generated (#[jevs::needs])
 ```
 
-`main.rs` is a fixed embedded asset, not LLM-generated.
-It calls `jevs::gate::init()?` to handle crossings,
+`main.rs` is a fixed embedded asset.
+It calls `jevs::manifest::init()?`
+to show resource needs and prompt approval,
+then `jevs::gate::init()?` for label crossings,
 then initializes a random RuntimeKey,
-calls `resources::create(&key)`,
+calls `tasks::create(&key)`,
 and passes the result to `tasks::root()`.
-This is the same for every plan.
+Same for every plan.
 
-`resources.rs` is auto-generated
-from the LLM's TOML resource declarations.
-The orchestrator maps each declaration
-to a struct field and constructor call.
-This is what the permission manifest
-is derived from.
+`tasks.rs` is the single LLM output.
+The `#[jevs::needs(...)]` macro
+generates the `Needs` struct and `create()` function.
+It also registers needs in a distributed slice
+so `manifest::init()` can display them.
 
 ## Implementation phases
 
@@ -1049,21 +1017,24 @@ build on sandboxing.
 - RuntimeKey barrier: `init(random)` once at startup,
   `File::open(&key, root)` requires the key,
   tasks never receive it
-- Split plan into `resources.rs` + `tasks.rs`
-- Fixed orchestrator-generated `main.rs` (embedded asset)
-- `resources.rs` auto-generated
-  from LLM TOML declarations
-  (struct + `create(&key)`)
-- LLM outputs two fenced blocks:
-  ```rust``` (tasks.rs) + ```toml``` (resource decls)
-- URL-based resource identification
-  (`file:./` = directory, `file:./config.toml` = file)
-- Permission manifest derived from declarations
-  (name, URL, access)
+- Single LLM output: one ```rust``` block
+  with `#[jevs::needs(...)]` attribute macro
+- `jevs-macros` proc macro crate
+  generates `Needs` struct, `create()`,
+  and distributed slice registrations
+- `jevs::manifest` module: `Need` struct,
+  `NEEDS` distributed slice, `init()` prompt
+  (same pattern as `gate::init()`)
+- Fixed `main.rs` shim (embedded asset)
+  calls `manifest::init()` then `gate::init()`
+  then `RuntimeKey::init()`
+- Re-exports: `jevs::File`, `jevs::FileTree`,
+  `jevs::Labeled`, `jevs::RuntimeKey`, `jevs::needs`
+- Path conventions for resource identification
+  (`"./"` = directory, `"./config.toml"` = file)
 - Stash: plan-local blob storage,
   created by tasks directly (no key required)
 - Per-module `API_DOCS` + `jevs::api::catalog()`
-- Qualified imports (no `use jevs::*`)
 - Cargo.toml as embedded template asset
 
 **Phase 3: Information flow model + resources**
