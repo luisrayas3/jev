@@ -1067,8 +1067,14 @@ build on sandboxing.
   fixed initial set (Me, Friend, World)
 - Contact book: maps contacts to tiers,
   stores per-contact settings and roles
+- Http resource type:
+  `Http<C, I>` scoped to base URL **(done)**
+- Resource label config:
+  persistent config file mapping resources
+  (paths, URLs) to their labels;
+  planner consults it, approval validates against it
 - Real-world resource types:
-  web, email (inbox/outbox), calendar
+  email (inbox/outbox), calendar
 - jevu: user utility library
   (curate reusable functions from prior plans)
 - Saved plans + rerunning

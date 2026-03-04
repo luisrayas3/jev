@@ -221,7 +221,8 @@ with decisions and changes from this session
 - The planner prompt in `jev/src/prompt.rs` must stay
   in sync with the actual `jevs` public API
 - Constructor APIs (`File::open`, `FileTree::open`,
-  `RuntimeKey::init`) are deliberately undocumented
+  `Http::open`, `RuntimeKey::init`)
+  are deliberately undocumented
   in the planner prompt; tasks should never call them
 - `jevs-macros` is a separate proc macro crate;
   `jevs` re-exports `jevs_macros::needs`
@@ -239,15 +240,16 @@ with decisions and changes from this session
 (see architecture.md for phased roadmap)
 
 **What's implemented**:
-- `jevs` library: `file`, `stash`, `text`, `label`,
-  `gate`, `manifest`, `runtime` modules
+- `jevs` library: `file`, `http`, `stash`, `text`,
+  `label`, `gate`, `manifest`, `runtime` modules
   with per-module API docs
 - `jevs-macros` proc macro crate:
   `#[jevs::needs(...)]` attribute macro
   generates `Needs` struct, `create()` function,
   and `linkme` distributed slice registrations
 - `jevs` re-exports: `jevs::File`, `jevs::FileTree`,
-  `jevs::Labeled`, `jevs::RuntimeKey`, `jevs::needs`
+  `jevs::Http`, `jevs::Labeled`,
+  `jevs::RuntimeKey`, `jevs::needs`
 - `jevs::manifest` module: `Need` struct,
   `NEEDS` distributed slice
   (data only; approval prompt in plan main.rs)
@@ -280,6 +282,12 @@ with decisions and changes from this session
   `write()` requires compatible labels
   via `SatisfiesClassification` + `SatisfiesIntegrity` bounds;
   trailing `/` in path distinguishes them
+- `jevs::http::Http<C, I>`:
+  HTTP resource scoped to a base URL;
+  `get(path)` returns `Labeled<String, C, I>`;
+  `post(path, body)` with label bounds;
+  `set_header(name, value)` for auth headers;
+  default User-Agent `jev/0.1`
 - `jevs::api::catalog()` aggregates module docs
 - `jev` CLI with `plan`, `run`, and `go` subcommands;
   split into modules: `main.rs` (CLI dispatch),
@@ -302,7 +310,7 @@ with decisions and changes from this session
   (macros reference `::linkme::` in plan crate)
 - Compile error feedback loop
   (retry with error context, up to 4 attempts)
-- Unit tests (33) + e2e test (fish, full pipeline)
+- Unit tests (35) + e2e test (fish, full pipeline)
 
 **What's NOT implemented yet**:
 - Human confirmation for `declassify`/`accredit`
@@ -318,8 +326,11 @@ with decisions and changes from this session
 - Jev planner subagents
   (nested planning loop,
   compilation as integrity endorsement)
+- Resource label config
+  (persistent mapping of resources to labels;
+  planner consults, approval validates)
 - Additional resource types
-  (email, calendar, knowledge base, HTTP)
+  (email, calendar, knowledge base)
 - Task tree decomposition
   (expand down / resolve up planning loop)
 - Containerized execution
