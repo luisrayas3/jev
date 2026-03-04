@@ -9,6 +9,7 @@ anyhow = "1"
 glob = "0.3"
 jevs-macros = { path = "../jevs-macros" }
 linkme = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 sha2 = "0.10"
 
 [dev-dependencies]
