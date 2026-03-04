@@ -108,57 +108,58 @@ as an audit artifact but is not a blocking gate.
 
 ### Data flow
 
-```
-Task description
-    |
-    v
-PHASE 1: EXPAND DOWN (task decomposition)
-    |
-    |  Root planner decomposes task into subtasks
-    |  Subtasks decompose further (tree grows down)
-    |  No resource thinking yet - just what needs to happen
-    |
-    v
-PHASE 2: IMPLEMENT LEAVES (parallelizable)
-    |
-    |  Each leaf gets: task desc + function signature
-    |  LLM generates function body
-    |  Each leaf declares its resource needs
-    |
-    v
-PHASE 3: RESOLVE UP (mostly mechanical)
-    |
-    |  Child resource needs propagate to parents
-    |  Shared resources pulled into parent structs
-    |  Parent orchestration: join! vs sequential
-    |  Root collects all external resource declarations
-    |
-    v
-PHASE 4: COMPILE + VERIFY
-    |
-    |  tasks.rs: all task code with #[jevs::needs]
-    |  main.rs: fixed shim (orchestrator-generated)
-    |  cargo build (rustc validates safety)
-    |      |
-    |      +--[compile error]--> feed back to planner
-    |      |
-    |      +--[success]--> permission manifest
-    |                          |
-    |            [no label crossings]--> auto-approve
-    |            [label crossings]----> human confirms
-    |                               boundary crossings
-    |                          |
-    |                          v
-    |                      container configured
-    |                      from declared resources
-    |
-    v
-EXECUTION (compiled plan in container)
-    |
-    |  Only declared resources mounted
-    |  Native code: transforms, I/O, orchestration
-    |  Subagent calls: typed, resource-scoped
-    |  Results
+```mermaid
+flowchart TD
+    A["Task description"] --> B
+
+    subgraph B["Phase 1: Expand down"]
+        B1["Root planner decomposes task into subtasks"]
+        B2["Subtasks decompose further (tree grows down)"]
+        B3["No resource thinking yet"]
+    end
+
+    B --> C
+
+    subgraph C["Phase 2: Implement leaves"]
+        C1["Each leaf gets: task desc + function signature"]
+        C2["LLM generates function body"]
+        C3["Each leaf declares its resource needs"]
+    end
+
+    C --> D
+
+    subgraph D["Phase 3: Resolve up"]
+        D1["Child resource needs propagate to parents"]
+        D2["Shared resources pulled into parent structs"]
+        D3["Parent orchestration: join! vs sequential"]
+        D4["Root collects all external resource declarations"]
+    end
+
+    D --> E
+
+    subgraph E["Phase 4: Compile + verify"]
+        E1["tasks.rs: all task code with #[jevs::needs]"]
+        E2["main.rs: fixed shim"]
+        E3["cargo build (rustc validates safety)"]
+    end
+
+    E3 -->|compile error| E3a["Feed back to planner"]
+    E3 -->|success| F["Permission manifest"]
+
+    F -->|no label crossings| G["Auto-approve"]
+    F -->|label crossings| H["Human confirms\nboundary crossings"]
+
+    G --> I["Container configured\nfrom declared resources"]
+    H --> I
+
+    I --> J
+
+    subgraph J["Execution"]
+        J1["Only declared resources mounted"]
+        J2["Native code: transforms, I/O, orchestration"]
+        J3["Subagent calls: typed, resource-scoped"]
+        J4["Results"]
+    end
 ```
 
 ### The planning loop
