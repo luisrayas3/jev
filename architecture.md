@@ -978,9 +978,12 @@ plans/<id>/
 ```
 
 `main.rs` is a fixed embedded asset.
-It calls `jevs::manifest::init()?`
-to show resource needs and prompt approval,
-then `jevs::gate::init()?` for label crossings,
+It shows resource needs and crossing count,
+prompts for approval
+(default Y if no crossings, N if crossings;
+'t' to view the tasks source with 4-space indent),
+then calls `jevs::gate::init()?`
+for per-crossing a/p/r decisions,
 then initializes a random RuntimeKey,
 calls `tasks::create(&key)`,
 and passes the result to `tasks::root()`.

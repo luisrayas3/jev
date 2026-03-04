@@ -360,11 +360,6 @@ fn build_plan(plan_dir: &Path) -> Result<PathBuf> {
     Ok(binary_path(plan_dir))
 }
 
-fn tasks_code(plan_dir: &Path) -> Result<String> {
-    std::fs::read_to_string(plan_dir.join("src/tasks.rs"))
-        .context("reading tasks.rs")
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -389,29 +384,7 @@ async fn main() -> Result<()> {
         Command::Go { task } => {
             eprintln!("Planning: {task}");
             let plan_dir = plan_and_compile(&task).await?;
-            let binary = binary_path(&plan_dir);
-
-            loop {
-                eprint!("\nRun? [y/N/t=show tasks] ");
-                let mut input = String::new();
-                std::io::stdin().read_line(&mut input).ok();
-                match input.trim() {
-                    "y" | "Y" | "yes" => {
-                        run_binary(&binary)?;
-                        break;
-                    }
-                    "t" | "T" => {
-                        let code = tasks_code(&plan_dir)?;
-                        eprintln!("--- tasks.rs ---");
-                        eprint!("{code}");
-                        eprintln!("--- end ---");
-                    }
-                    _ => {
-                        eprintln!("Aborted.");
-                        break;
-                    }
-                }
-            }
+            run_binary(&binary_path(&plan_dir))?;
         }
     }
 

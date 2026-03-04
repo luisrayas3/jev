@@ -249,8 +249,8 @@ with decisions and changes from this session
 - `jevs` re-exports: `jevs::File`, `jevs::FileTree`,
   `jevs::Labeled`, `jevs::RuntimeKey`, `jevs::needs`
 - `jevs::manifest` module: `Need` struct,
-  `NEEDS` distributed slice, `init()` prompt;
-  same pattern as `gate::init()`
+  `NEEDS` distributed slice
+  (data only; approval prompt in plan main.rs)
 - `jevs::label::Labeled<T, C, I>`:
   two-axis IFC wrapper carrying confidentiality
   (Private/Public) and integrity (Me/Friend/World);
@@ -288,13 +288,16 @@ with decisions and changes from this session
 - RuntimeKey barrier
 - Plan structure: `main.rs` (embedded asset) +
   `tasks.rs` (LLM with `#[jevs::needs]`)
-- Plan `main.rs` calls `manifest::init()` then
-  `gate::init()` before `RuntimeKey::init`
+- Plan `main.rs` shows needs + crossings,
+  unified approval prompt (default Y if no crossings,
+  N if crossings; 't' to view tasks source),
+  then `gate::init()` for per-crossing decisions,
+  then `RuntimeKey::init`
 - Plan `Cargo.toml` includes `linkme` dependency
   (macros reference `::linkme::` in plan crate)
 - Compile error feedback loop
   (retry with error context, up to 4 attempts)
-- Unit tests (36) + e2e test (fish, full pipeline)
+- Unit tests (33) + e2e test (fish, full pipeline)
 
 **What's NOT implemented yet**:
 - Human confirmation for `declassify`/`accredit`
