@@ -218,7 +218,7 @@ with decisions and changes from this session
 - Each jevs module has `pub const API_DOCS`
   documenting its API; `jevs::api::catalog()`
   aggregates them for the planner prompt
-- The planner prompt in `jev/src/main.rs` must stay
+- The planner prompt in `jev/src/prompt.rs` must stay
   in sync with the actual `jevs` public API
 - Constructor APIs (`File::open`, `FileTree::open`,
   `RuntimeKey::init`) are deliberately undocumented
@@ -281,7 +281,12 @@ with decisions and changes from this session
   via `SatisfiesClassification` + `SatisfiesIntegrity` bounds;
   trailing `/` in path distinguishes them
 - `jevs::api::catalog()` aggregates module docs
-- `jev` CLI with `plan`, `run`, and `go` subcommands
+- `jev` CLI with `plan`, `run`, and `go` subcommands;
+  split into modules: `main.rs` (CLI dispatch),
+  `llm.rs` (API client, response parsing),
+  `plan.rs` (paths, IDs, retry loop),
+  `prompt.rs` (system prompt),
+  `exec.rs` (build and run)
 - LLM integration via Anthropic API
 - LLM outputs single ```rust``` block
   with `#[jevs::needs(...)]` declarations
